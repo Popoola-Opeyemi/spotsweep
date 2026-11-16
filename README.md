@@ -2,16 +2,23 @@
 
 A small, native Rust utility that discovers development directories which should
 be excluded from Spotlight indexing, tracks them in SQLite, watches for new ones
-with macOS FSEvents, and generates a plain-text list for **manual** addition in
-**System Settings → Spotlight → Search Privacy**.
+with macOS FSEvents, and adds them to the same **Spotlight Search Privacy** list
+used by System Settings.
 
-It is deliberately boring about system state: it never edits Spotlight
-configuration, never writes to `mds`, never calls private XPC interfaces, and
-never modifies project files. Exporting a path is not the same as excluding it.
+Automatic exclusion uses the private `_MDCopyExclusionList` / `_MDSetExclusion`
+calls in `Metadata.framework`, the same mechanism used by
+[`rohiitgit/nohog`](https://github.com/rohiitgit/nohog). Every change is verified
+against Spotlight's reported list, and a self-test proves the API works on the
+current macOS build before it is enabled. If the API is missing or a change is
+not confirmed, the directory stays in the manual export workflow instead.
+
+It never edits `VolumeConfiguration.plist`, never writes to Spotlight's private
+databases, never modifies project files, and never requires root or Full Disk
+Access for exclusion operations.
 
 - **Project path (example):** `~/work/spotlight-dev-exclusions`
 - **Binary name:** `spotlight-dev`
-- **Target:** macOS on Apple Silicon (aarch64), also builds for Intel macOS
+- **Target:** universal macOS build (Apple Silicon + Intel)
 - **Runtime:** no Docker, Node.js, Python, or database server
 
 ---
@@ -31,29 +38,60 @@ compiled binaries, SQLite files, logs, or exports.
 
 ---
 
-## Why the manual step exists
+## Automatic exclusion and the fallback
 
-Apple does not provide a supported programmatic API or command-line interface
-for adding individual folders to Spotlight's Search Privacy list. The supported
-workflow is the System Settings UI:
+Apple does not document a public API for adding individual folders to
+Spotlight's Search Privacy list. The private API in `Metadata.framework` is
+nevertheless used by the System Settings implementation itself:
 
+```text
+dlopen("/System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Metadata")
+_MDCopyExclusionList()                    -> CFArrayRef
+_MDSetExclusion(CFStringRef, uint32_t)    -> int32_t
 ```
-System Settings → Spotlight → Search Privacy → +
-```
 
-`spotlight-dev` therefore **generates a list and instructions**; it does not
-claim that anything is excluded until you explicitly record the manual action
-and confirm it.
+`spotlight-dev` resolves those symbols dynamically (no private SDK headers, no
+link-time dependency), calls them as your user, and **re-reads the exclusion
+list after every request**. A non-zero API return value is never treated as
+proof; a path is recorded as excluded only when Spotlight's list contains it.
+The selftest additionally proves the behavior with `mdfind`:
+
+1. create a control folder and an excluded folder under `$HOME`;
+2. add only the excluded folder to Search Privacy;
+3. wait for Spotlight to index a normal file in the control folder;
+4. confirm `mdfind` finds the control file and does **not** find the file in the
+   excluded folder;
+5. remove the test exclusion and verify pre-existing user exclusions are still
+   present.
+
+If the API is unavailable, the selftest fails, a macOS update changes behavior,
+or Spotlight does not confirm a request after retries, the affected directory is
+marked `pending_manual_exclusion` and remains in the export workflow. The
+export workflow is unchanged and always available.
+
+The exact investigation, symbols, ABI observations and risks are documented in
+[`docs/PRIVATE_API.md`](docs/PRIVATE_API.md).
 
 ### What about `sudo mdutil -P /`?
 
-Researched and tested for this project. On current macOS, `mdutil -P <volume>`
-dumps the volume's **`VolumeConfiguration.plist`** (index store configuration).
-It does **not** expose the Search Privacy exclusion list, it requires root, and
-its output is not a stable public interface. It is therefore never used as proof
-of an exclusion. `spotlight-dev verify --mdutil` can show the diagnostic result,
-but it always remains inconclusive. Verification is only recorded after explicit
-visual confirmation (`verify --confirm`).
+Researched and tested. `mdutil -P <volume>` dumps the volume's
+**`VolumeConfiguration.plist`** (index store configuration). It does **not**
+expose the Search Privacy exclusion list, it requires root, and its output is
+not a stable public interface. It is therefore never used as proof of an
+exclusion. `spotlight-dev verify --mdutil` shows the diagnostic result but
+remains inconclusive.
+
+### Risks of the private API
+
+- Apple can change or remove the symbols in any macOS release.
+- The API writes the same list System Settings uses; adding an exclusion causes
+  Spotlight to purge already-indexed content under that path.
+- The API is not covered by Apple's compatibility guarantees and may require
+  re-verification after upgrades. This project records a passing selftest per
+  macOS build and re-runs it when the build changes.
+- It does not require root or Full Disk Access. Operations you request on
+  protected folders may still trigger normal macOS privacy prompts.
+- No direct plist/database edits and no undocumented XPC calls are used.
 
 ---
 
@@ -69,8 +107,12 @@ visual confirmation (`verify --confirm`).
 - Native FSEvents monitoring with persisted event IDs and dropped-history handling
 - Debounced, targeted discovery — an `npm install` does not trigger a full walk
 - Periodic reconciliation as a safety net (default every 6 hours)
-- Manual export grouped by project or flat, with instructions
+- Automatic Spotlight exclusion through private `Metadata.framework` calls
+- Post-change verification against Spotlight's actual exclusion list
+- User- and CLI-managed exclusions, with explicit `unexclude` opt-outs
+- Manual export grouped by project or flat, retained as the safe fallback
 - User-level LaunchAgent; idle state is a blocking wait (no busy polling)
+- Universal release build for Apple Silicon and Intel, Homebrew and curl installers
 - Fully reversible install, upgrade and uninstall scripts
 
 ---

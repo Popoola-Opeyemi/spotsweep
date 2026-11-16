@@ -31,6 +31,7 @@ pub struct Config {
     pub export: ExportConfig,
     pub daemon: DaemonConfig,
     pub verify: VerifyConfig,
+    pub exclusions: ExclusionsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,6 +78,25 @@ pub struct DaemonConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct VerifyConfig {
     pub mdutil_volume: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExclusionsConfig {
+    /// Add newly discovered build directories to Spotlight's Search Privacy
+    /// list automatically.  Requires a passing selftest on the current macOS
+    /// build when `selftest_required` is true.
+    pub auto: bool,
+    /// Run the end-to-end selftest once per macOS build before enabling
+    /// automatic exclusions in the background service.
+    pub run_selftest_on_os_change: bool,
+    /// If true, automatic exclusion does nothing until a selftest has passed
+    /// for the current macOS build.  The CLI `sync` command can still be run
+    /// explicitly by the user.
+    pub selftest_required: bool,
+    /// Remove managed exclusions whose directory no longer exists.  Entries
+    /// added by the user in System Settings are never removed.
+    pub remove_stale: bool,
 }
 
 impl Default for ScanConfig {
@@ -152,6 +172,17 @@ impl Default for VerifyConfig {
     fn default() -> Self {
         Self {
             mdutil_volume: "/".into(),
+        }
+    }
+}
+
+impl Default for ExclusionsConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            run_selftest_on_os_change: true,
+            selftest_required: true,
+            remove_stale: true,
         }
     }
 }
@@ -417,6 +448,14 @@ impl Config {
                 self.daemon.log_level = value.to_string();
             }
             "verify.mdutil_volume" => self.verify.mdutil_volume = value.to_string(),
+            "exclusions.auto" => self.exclusions.auto = bool_value()?,
+            "exclusions.run_selftest_on_os_change" => {
+                self.exclusions.run_selftest_on_os_change = bool_value()?
+            }
+            "exclusions.selftest_required" => {
+                self.exclusions.selftest_required = bool_value()?
+            }
+            "exclusions.remove_stale" => self.exclusions.remove_stale = bool_value()?,
             other => return Err(ConfigError::UnknownKey(other.to_string()).into()),
         }
         self.validate()?;

@@ -62,6 +62,98 @@ impl Status {
     }
 }
 
+/// State of an automatic Spotlight exclusion.  This is kept separate from the
+/// manual `Status` lifecycle so the export fallback remains meaningful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionState {
+    /// A request has been made, but Spotlight's list has not yet shown it.
+    Pending,
+    /// The path is present in Spotlight's Search Privacy list.
+    Excluded,
+    /// Spotlight did not apply the request; the manual export fallback applies.
+    Failed,
+    /// The path was removed from Spotlight's list and is no longer managed.
+    Released,
+}
+
+impl ExclusionState {
+    pub const ALL: [ExclusionState; 4] = [
+        ExclusionState::Pending,
+        ExclusionState::Excluded,
+        ExclusionState::Failed,
+        ExclusionState::Released,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExclusionState::Pending => "pending",
+            ExclusionState::Excluded => "excluded",
+            ExclusionState::Failed => "failed",
+            ExclusionState::Released => "released",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|state| state.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionSource {
+    /// Added because a discovered build directory matched a rule.
+    Auto,
+    /// Added because the user ran `spotlight-dev exclude`.
+    Cli,
+    /// Already present in Spotlight's list before this application saw it.
+    User,
+}
+
+impl ExclusionSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExclusionSource::Auto => "auto",
+            ExclusionSource::Cli => "cli",
+            ExclusionSource::User => "user",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(ExclusionSource::Auto),
+            "cli" => Some(ExclusionSource::Cli),
+            "user" => Some(ExclusionSource::User),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExclusionRecord {
+    pub path: String,
+    pub directory_id: Option<i64>,
+    pub managed: bool,
+    pub state: String,
+    pub source: String,
+    pub added_at: i64,
+    pub verified_at: Option<i64>,
+    pub last_checked_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+impl ExclusionRecord {
+    pub fn parsed_state(&self) -> ExclusionState {
+        ExclusionState::parse(&self.state).unwrap_or(ExclusionState::Failed)
+    }
+
+    pub fn parsed_source(&self) -> ExclusionSource {
+        ExclusionSource::parse(&self.source).unwrap_or(ExclusionSource::Auto)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleKind {
@@ -147,6 +239,13 @@ pub struct DirectoryRecord {
     pub missing_at: Option<i64>,
     pub retry_count: i64,
     pub last_error: Option<String>,
+    /// Automatic exclusion state, if this path has been processed by the
+    /// exclusion backend.  This is independent of the manual workflow status.
+    pub exclusion_state: Option<String>,
+    /// True only when this application added the path to Spotlight's list.
+    pub exclusion_managed: Option<bool>,
+    pub exclusion_verified_at: Option<i64>,
+    pub exclusion_error: Option<String>,
 }
 
 impl DirectoryRecord {

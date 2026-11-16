@@ -218,6 +218,10 @@ mod tests {
             missing_at: None,
             retry_count: 0,
             last_error: None,
+            exclusion_state: None,
+            exclusion_managed: None,
+            exclusion_verified_at: None,
+            exclusion_error: None,
         }
     }
 

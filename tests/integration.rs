@@ -33,6 +33,10 @@ impl TestEnv {
         let mut cfg = Config::default();
         cfg.scan.roots = vec![root.to_string_lossy().to_string()];
         cfg.export.directory = data.join("exports").to_string_lossy().to_string();
+        // Integration tests must never change the developer's real Spotlight
+        // Search Privacy list.  The live API is covered by `selftest`.
+        cfg.exclusions.auto = false;
+        cfg.exclusions.selftest_required = false;
         cfg.save(&config).unwrap();
         Self {
             _temp: temp,

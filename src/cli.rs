@@ -2,10 +2,12 @@
 
 use crate::config::Config;
 use crate::database::{Db, DirectoryFilter, MarkTarget};
+use crate::exclusion::{self, MutationOutcome};
 use crate::exporter::{self, ExportRequest};
 use crate::launchagent;
 use crate::matcher::RuleSet;
-use crate::model::{DirectoryRecord, ScanKind, Status};
+use crate::metadata::MetadataBackend;
+use crate::model::{DirectoryRecord, ExclusionSource, ScanKind, Status};
 use crate::paths::{AppPaths, display_path, home_dir, normalize_path, validate_scan_root};
 use crate::scanner;
 use crate::util::{
@@ -116,8 +118,11 @@ enum Command {
         #[arg(long)]
         open: bool,
     },
-    /// Check available exclusion information without modifying Spotlight
+    /// Check Spotlight's actual Search Privacy state for a path
     Verify {
+        /// Paths to verify against Spotlight's exclusion list (repeatable)
+        #[arg(value_name = "PATH")]
+        targets: Vec<String>,
         /// Probe mdutil -P (root only; diagnostic; never treated as proof)
         #[arg(long)]
         mdutil: bool,
@@ -130,6 +135,32 @@ enum Command {
         /// Exit with status 3 unless verification succeeded
         #[arg(long)]
         strict: bool,
+    },
+    /// Add a directory to Spotlight's Search Privacy list
+    Exclude {
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Preview without changing Spotlight
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove a directory from Spotlight's Search Privacy list
+    Unexclude {
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
+    /// Reconcile discovered directories with Spotlight's actual exclusion list
+    Sync {
+        /// Show what would change without changing Spotlight
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove that Spotlight honors exclusions on this macOS build
+    Selftest {
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect SQLite, FSEvents cursor and scan state
     State {
@@ -178,7 +209,7 @@ enum Command {
         #[arg(long, value_name = "ID")]
         export: Option<i64>,
     },
-    /// Remove the LaunchAgent and optionally application data
+    /// Remove the LaunchAgent and app-managed Spotlight exclusions
     Uninstall {
         /// Delete the database, configuration, exports and logs
         #[arg(long)]
@@ -186,6 +217,9 @@ enum Command {
         /// Delete the installed executable
         #[arg(long)]
         remove_binary: bool,
+        /// Keep the Spotlight exclusions this application added
+        #[arg(long)]
+        keep_exclusions: bool,
         /// Required with --purge-data
         #[arg(long)]
         yes: bool,
@@ -249,8 +283,15 @@ pub fn run() -> Result<()> {
         Command::Uninstall {
             purge_data,
             remove_binary,
+            keep_exclusions,
             yes,
-        } => cmd_uninstall(&paths, purge_data, remove_binary, yes),
+        } => cmd_uninstall(
+            &paths,
+            purge_data,
+            remove_binary,
+            keep_exclusions,
+            yes,
+        ),
         Command::Daemon => crate::daemon::run(paths),
         Command::Logs { lines, follow } => cmd_logs(&paths, lines, follow),
         other => {
@@ -284,6 +325,7 @@ pub fn run() -> Result<()> {
                     output, open,
                 ),
                 Command::Verify {
+                    targets,
                     mdutil,
                     confirm,
                     paths: verify_paths,
@@ -292,11 +334,18 @@ pub fn run() -> Result<()> {
                     &paths,
                     &config,
                     &mut db,
+                    targets,
                     mdutil,
                     confirm,
                     verify_paths,
                     strict,
                 ),
+                Command::Exclude { path, dry_run } => {
+                    cmd_exclude(&mut db, &path, dry_run)
+                }
+                Command::Unexclude { path } => cmd_unexclude(&mut db, &path),
+                Command::Sync { dry_run, json } => cmd_sync(&config, &mut db, dry_run, json),
+                Command::Selftest { json } => cmd_selftest(&paths, &mut db, json),
                 Command::State { json } => cmd_state(&paths, &db, json),
                 Command::Retry => cmd_retry(&mut db),
                 Command::Rescan { root } => cmd_rescan(&paths, &config, &mut db, &matcher, root),
@@ -361,7 +410,8 @@ fn cmd_scan(
         };
         let summary = scanner::full_scan(db, config, matcher, kind, only_root.as_deref())?;
         print_scan_summary(&summary);
-        println!("Next: `spotlight-dev export` to produce the manual Search Privacy list.");
+        auto_sync_after_discovery(config, db, "scan")?;
+        println!("Next: `spotlight-dev export` for the manual fallback list.");
         let _ = paths;
         return Ok(());
     }
@@ -417,6 +467,57 @@ fn cmd_scan(
             );
             println!("Next: `spotlight-dev pending` or `spotlight-dev export`.");
         }
+        auto_sync_after_discovery(config, db, "incremental scan")?;
+    }
+    Ok(())
+}
+
+/// Apply automatic exclusions after a CLI scan when the service-level gate
+/// allows it.  A missing private API is a warning, never a failed scan.
+fn auto_sync_after_discovery(config: &Config, db: &mut Db, reason: &str) -> Result<()> {
+    if !config.exclusions.auto {
+        return Ok(());
+    }
+    if config.exclusions.selftest_required && !exclusion::selftest_passed_for_current_build(db)? {
+        println!(
+            "Automatic exclusion is gated: run `spotlight-dev selftest` once for this macOS build, or use `spotlight-dev sync` explicitly."
+        );
+        return Ok(());
+    }
+    let backend = match MetadataBackend::open() {
+        Ok(backend) => backend,
+        Err(error) => {
+            println!(
+                "Automatic exclusion unavailable ({error}); the manual export workflow remains active."
+            );
+            return Ok(());
+        }
+    };
+    match exclusion::auto_sync(db, config, Some(&backend), reason)? {
+        Some(report) if !report.add.is_empty() || !report.remove.is_empty() => {
+            println!(
+                "Automatic exclusion: +{} -{} ({} failed)",
+                report.add.len(),
+                report.remove.len(),
+                report.failed_adds.len() + report.failed_removes.len()
+            );
+            for path in &report.add {
+                println!("  + {path}");
+            }
+            for path in &report.remove {
+                println!("  - {path}");
+            }
+            for path in report.failed_adds.iter().chain(report.failed_removes.iter()) {
+                println!("  ! Spotlight did not apply: {path}");
+            }
+        }
+        Some(report) if !report.succeeded() => {
+            println!(
+                "Automatic exclusion: {} change(s) were not confirmed by Spotlight.",
+                report.failed_adds.len() + report.failed_removes.len()
+            );
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -458,6 +559,8 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
         .filter(|r| Path::new(&r.path).is_dir())
         .count();
     let pending = db.count_pending()?;
+    let exclusion_counts = db.count_by_exclusion_state()?;
+    let managed_exclusions = db.managed_exclusion_count()?;
     let service = launchagent::status(paths).ok();
     let verification = db.latest_verification()?;
     let exports = db.recent_exports(1)?;
@@ -481,6 +584,8 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
             "total_directories": total,
             "by_status": status_map,
             "pending": pending,
+            "managed_exclusions": managed_exclusions,
+            "exclusions_by_state": exclusion_counts.iter().cloned().collect::<BTreeMap<_, _>>(),
             "roots_configured": enabled_roots.len(),
             "roots_existing": existing_roots,
             "last_scan_at": last_scan_at,
@@ -509,10 +614,16 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
         config.scan.roots.len(),
         existing_roots
     );
-    println!("  Directories: {total} tracked, {pending} pending manual exclusion");
+    println!("  Directories: {total} tracked, {pending} pending manual fallback");
     for status in Status::ALL {
         let count = by_status.get(status.as_str()).copied().unwrap_or(0);
         println!("    {:<24} {count}", status.as_str());
+    }
+    println!("  Managed Spotlight exclusions: {managed_exclusions}");
+    if !exclusion_counts.is_empty() {
+        for (state, count) in &exclusion_counts {
+            println!("    {:<24} {count}", format!("exclusion:{state}"));
+        }
     }
     println!(
         "  Last scan: {} ({})",
@@ -810,12 +921,59 @@ fn cmd_verify(
     _paths: &AppPaths,
     config: &Config,
     db: &mut Db,
+    targets: Vec<String>,
     mdutil: bool,
     confirm: bool,
     paths: Vec<String>,
     strict: bool,
 ) -> Result<()> {
-    let normalized: Vec<String> = paths
+    let mut requested = targets;
+    requested.extend(paths);
+    if !confirm && !requested.is_empty() {
+        let mut checked = 0;
+        let mut verified = 0;
+        let mut all_excluded = true;
+        let mut messages = Vec::new();
+        for target in &requested {
+            let report = match MetadataBackend::open() {
+                Ok(backend) => exclusion::verify_path_with_backend(&backend, Path::new(target))?,
+                Err(error) => exclusion::verify_unsupported(Path::new(target), &error.to_string()),
+            };
+            checked += 1;
+            if report.outcome == exclusion::VerifyOutcome::Excluded {
+                verified += 1;
+            } else {
+                all_excluded = false;
+            }
+            println!("{}", report.path);
+            println!("  outcome: {}", report.outcome.as_str());
+            println!("  method:  {}", report.method);
+            if let Some(count) = report.indexed_items {
+                println!("  indexed items reported by mdfind: {count}");
+            }
+            println!("  {}", report.message);
+            println!();
+            messages.push(format!("{}: {}", report.path, report.outcome.as_str()));
+        }
+        let outcome = if all_excluded {
+            "excluded"
+        } else {
+            "incomplete"
+        };
+        db.record_verification(
+            "metadata-api",
+            outcome,
+            &messages.join("; "),
+            checked,
+            verified,
+        )?;
+        if strict && !all_excluded {
+            std::process::exit(3);
+        }
+        return Ok(());
+    }
+
+    let normalized: Vec<String> = requested
         .iter()
         .map(|p| normalize_path(Path::new(p)).map(|p| p.to_string_lossy().to_string()))
         .collect::<Result<Vec<_>>>()?;
@@ -838,6 +996,174 @@ fn cmd_verify(
     Ok(())
 }
 
+fn cmd_exclude(db: &mut Db, raw: &str, dry_run: bool) -> Result<()> {
+    if dry_run {
+        let backend = MetadataBackend::open().map_err(anyhow::Error::new)?;
+        let target = exclusion::resolve_exclusion_path(Path::new(raw))?;
+        let current = backend
+            .list()
+            .map_err(anyhow::Error::new)?
+            .into_iter()
+            .map(|path| exclusion::normalize_reported_path(&path))
+            .collect::<Vec<_>>();
+        let present = current.iter().any(|path| path == &target);
+        println!("Dry run: {target}");
+        println!("  currently in Spotlight's exclusion list: {present}");
+        println!("  no changes were made");
+        return Ok(());
+    }
+
+    let report = exclusion::exclude_path(db, Path::new(raw), ExclusionSource::Cli)?;
+    println!("Path: {}", report.path);
+    println!("Outcome: {:?}", report.outcome);
+    println!("Managed by spotlight-dev: {}", report.managed);
+    println!("{}", report.message);
+    for failure in &report.api_failures {
+        println!(
+            "  note: _MDSetExclusion returned {} for {} ({})",
+            failure.api_result, failure.path, failure.operation
+        );
+    }
+    if report.outcome == MutationOutcome::Failed {
+        eprintln!(
+            "The exclusion was not confirmed. The directory remains in the manual export workflow."
+        );
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn cmd_unexclude(db: &mut Db, raw: &str) -> Result<()> {
+    let report = exclusion::unexclude_path(db, Path::new(raw))?;
+    println!("Path: {}", report.path);
+    println!("Outcome: {:?}", report.outcome);
+    println!("{}", report.message);
+    for failure in &report.api_failures {
+        println!(
+            "  note: _MDSetExclusion returned {} for {} ({})",
+            failure.api_result, failure.path, failure.operation
+        );
+    }
+    if report.outcome == MutationOutcome::Failed {
+        eprintln!("Spotlight still reports the path; the managed record was kept for a retry.");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn cmd_sync(config: &Config, db: &mut Db, dry_run: bool, json_output: bool) -> Result<()> {
+    let backend = MetadataBackend::open().map_err(anyhow::Error::new)?;
+    let report = exclusion::sync(db, config, &backend, dry_run)?;
+    if json_output {
+        return json_pretty(&report);
+    }
+    println!(
+        "Spotlight exclusions: {} desired, {} currently listed",
+        report.desired_count, report.current_count
+    );
+    if dry_run {
+        println!("Dry run; no changes were made.");
+    }
+    for path in &report.add {
+        println!("{} {path}", if dry_run { "+ (would add)" } else { "+" });
+    }
+    for path in &report.remove {
+        println!(
+            "{} {path}",
+            if dry_run { "- (would remove)" } else { "-" }
+        );
+    }
+    for path in &report.failed_adds {
+        println!("! Spotlight did not apply exclusion: {path}");
+    }
+    for path in &report.failed_removes {
+        println!("! Spotlight did not remove exclusion: {path}");
+    }
+    for failure in &report.api_failures {
+        println!(
+            "  note: _MDSetExclusion returned {} for {} ({})",
+            failure.api_result, failure.path, failure.operation
+        );
+    }
+    if report.user_preserved > 0 {
+        println!(
+            "{} entry/entries not managed by this application were left untouched.",
+            report.user_preserved
+        );
+    }
+    if report.add.is_empty() && report.remove.is_empty() {
+        println!("Nothing to do.");
+    }
+    if !report.succeeded() {
+        eprintln!("Some changes were not confirmed by Spotlight; retry `sync` later.");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn cmd_selftest(paths: &AppPaths, db: &mut Db, json_output: bool) -> Result<()> {
+    let backend = match MetadataBackend::open() {
+        Ok(backend) => backend,
+        Err(error) => {
+            if json_output {
+                json_pretty(&json!({
+                    "outcome": "unsupported",
+                    "message": error.to_string(),
+                    "backend": "Metadata.framework",
+                    "os_build": exclusion::os_build(),
+                }))?;
+            } else {
+                println!("Spotlight exclusion selftest");
+                println!("  result:   unsupported");
+                println!("  macOS:    {}", exclusion::os_build());
+                println!("  backend:  Metadata.framework");
+                println!("  {}", error);
+                println!();
+                println!(
+                    "Automatic exclusions are unavailable on this macOS. The manual export workflow remains active."
+                );
+            }
+            std::process::exit(1);
+        }
+    };
+    let parent = home_dir()?;
+    println!(
+        "Running Spotlight exclusion selftest under {} (usually 10-35 seconds)…",
+        parent.display()
+    );
+    let report = exclusion::selftest(&backend, &parent)?;
+    exclusion::record_selftest(db, &report)?;
+    if json_output {
+        return json_pretty(&report);
+    }
+    println!("Result: {}", report.outcome.as_str());
+    println!("  macOS:   {} ({})", report.macos_version, report.os_build);
+    println!("  backend: {}", report.backend);
+    println!("  {}", report.message);
+    println!();
+    for check in &report.checks {
+        let mark = match check.passed {
+            Some(true) => "PASS",
+            Some(false) => "FAIL",
+            None => "????",
+        };
+        println!("  [{mark}] {}", check.name);
+        println!("         {}", check.detail);
+    }
+    println!();
+    println!(
+        "Checks: {} passed, {} failed. Data directory: {}",
+        report.passed,
+        report.failed,
+        paths.data_dir.display()
+    );
+    match report.outcome {
+        exclusion::SelftestOutcome::Pass => Ok(()),
+        exclusion::SelftestOutcome::Inconclusive => std::process::exit(2),
+        _ => std::process::exit(1),
+    }
+}
+
 fn cmd_state(paths: &AppPaths, db: &Db, json_output: bool) -> Result<()> {
     let meta = db.all_meta()?;
     let scans = db.recent_scans(8)?;
@@ -851,6 +1177,8 @@ fn cmd_state(paths: &AppPaths, db: &Db, json_output: bool) -> Result<()> {
         "exports",
         "export_items",
         "verification_runs",
+        "exclusions",
+        "exclusion_opt_outs",
         "event_log",
     ];
     let mut table_counts = BTreeMap::new();
@@ -956,6 +1284,7 @@ fn cmd_rescan(
         only_root.as_deref(),
     )?;
     print_scan_summary(&summary);
+    auto_sync_after_discovery(config, db, "rescan")?;
     Ok(())
 }
 
@@ -993,6 +1322,7 @@ fn cmd_add_path(
             Some(&normalized),
         )?;
         print_scan_summary(&summary);
+        auto_sync_after_discovery(&config, db, "add-path")?;
     }
     Ok(())
 }
@@ -1241,7 +1571,13 @@ fn cmd_service(paths: &AppPaths, cmd: ServiceCommand) -> Result<()> {
     }
 }
 
-fn cmd_uninstall(paths: &AppPaths, purge_data: bool, remove_binary: bool, yes: bool) -> Result<()> {
+fn cmd_uninstall(
+    paths: &AppPaths,
+    purge_data: bool,
+    remove_binary: bool,
+    keep_exclusions: bool,
+    yes: bool,
+) -> Result<()> {
     if purge_data && !yes {
         bail!("--purge-data is destructive; re-run with --purge-data --yes");
     }
@@ -1249,6 +1585,38 @@ fn cmd_uninstall(paths: &AppPaths, purge_data: bool, remove_binary: bool, yes: b
         eprintln!("warning: could not remove LaunchAgent: {error:#}");
     } else {
         println!("LaunchAgent stopped and removed (if it was installed).");
+    }
+
+    if keep_exclusions {
+        println!("Spotlight exclusions were kept (--keep-exclusions).");
+    } else if paths.db_path.exists() {
+        match MetadataBackend::open() {
+            Ok(backend) => {
+                let mut db = Db::open(paths)?;
+                let report = exclusion::remove_all_managed(&mut db, &backend)?;
+                println!(
+                    "Removed {} Spotlight exclusion(s) added by this application.",
+                    report.removed.len()
+                );
+                if !report.user_preserved.is_empty() {
+                    println!(
+                        "{} user-managed exclusion(s) were left untouched.",
+                        report.user_preserved.len()
+                    );
+                }
+                if !report.failed.is_empty() {
+                    eprintln!(
+                        "warning: Spotlight did not confirm removal of: {}",
+                        report.failed.join(", ")
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "warning: Spotlight exclusion API unavailable ({error}); exclusions were left in place"
+                );
+            }
+        }
     }
 
     if remove_binary {

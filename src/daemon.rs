@@ -4,9 +4,11 @@
 
 use crate::config::Config;
 use crate::database::Db;
+use crate::exclusion::{self, ExclusionBackend, SelftestOutcome};
 use crate::matcher::RuleSet;
+use crate::metadata::MetadataBackend;
 use crate::model::ScanKind;
-use crate::paths::{AppPaths, is_hidden_name, is_root};
+use crate::paths::{AppPaths, home_dir, is_hidden_name, is_root};
 use crate::scanner;
 use crate::util::now_ms;
 use crate::watcher::{self, RawEvent, StreamHandle};
@@ -52,6 +54,67 @@ pub fn run(paths: AppPaths) -> Result<()> {
     sync_config(&mut db, &config)?;
     db.log_event("daemon_start", &format!("pid={}", std::process::id()))?;
 
+    let mut exclusion_backend: Option<MetadataBackend> = None;
+    if config.exclusions.auto {
+        match MetadataBackend::open() {
+            Ok(backend) => {
+                exclusion_backend = Some(backend);
+                if config.exclusions.run_selftest_on_os_change {
+                    let build = exclusion::os_build();
+                    let already_passed = db.meta_get("exclusion_selftest_build")?
+                        .as_deref()
+                        == Some(build.as_str())
+                        && db.meta_get("exclusion_selftest_result")?.as_deref() == Some("pass");
+                    if !already_passed {
+                        info!(build = %build, "running Spotlight exclusion selftest after OS change");
+                        let report = match home_dir() {
+                            Ok(home) => exclusion::selftest(
+                                exclusion_backend.as_ref().unwrap(),
+                                &home,
+                            ),
+                            Err(error) => Err(error),
+                        };
+                        match report {
+                            Ok(report) => {
+                                exclusion::record_selftest(&mut db, &report)?;
+                                match report.outcome {
+                                    SelftestOutcome::Pass => {
+                                        info!(build = %build, "Spotlight exclusion selftest passed")
+                                    }
+                                    SelftestOutcome::Inconclusive => warn!(
+                                        build = %build,
+                                        message = %report.message,
+                                        "Spotlight exclusion selftest was inconclusive; automatic exclusions stay enabled for now"
+                                    ),
+                                    _ => {
+                                        warn!(
+                                            build = %build,
+                                            message = %report.message,
+                                            "Spotlight exclusion selftest failed; automatic exclusions disabled"
+                                        );
+                                        db.log_event(
+                                            "exclusion_selftest_failed",
+                                            &report.message,
+                                        )?;
+                                        exclusion_backend = None;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                warn!(error = %error, "Spotlight exclusion selftest could not run; automatic exclusions disabled");
+                                exclusion_backend = None;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                warn!(error = %error, "Spotlight exclusion API unavailable; using the manual export workflow");
+                db.log_event("exclusion_api_unavailable", &error.to_string())?;
+            }
+        }
+    }
+
     let stored_cursor = db.meta_get_u64("fsevent_last_event_id")?;
     let cursor_at = db.meta_get_i64("fsevent_last_event_at")?;
     let total_dirs = db.count_all()?;
@@ -82,11 +145,13 @@ pub fn run(paths: AppPaths) -> Result<()> {
         let matcher = RuleSet::from_config(&config.rules)?;
         let summary = scanner::full_scan(&mut db, &config, &matcher, kind, None)?;
         info!(%summary.duration_ms, new = summary.new_dirs, matched = summary.matched, "startup scan complete");
+        run_auto_sync(&mut db, &config, backend_ref(&exclusion_backend), "startup scan");
     } else if reconcile_due {
         info!("reconciliation is due; scanning before live monitoring");
         let matcher = RuleSet::from_config(&config.rules)?;
         let summary = scanner::full_scan(&mut db, &config, &matcher, ScanKind::Reconcile, None)?;
         info!(matched = summary.matched, "startup reconciliation complete");
+        run_auto_sync(&mut db, &config, backend_ref(&exclusion_backend), "startup reconcile");
         cursor = stored_cursor.unwrap();
     } else {
         cursor = stored_cursor.unwrap();
@@ -124,7 +189,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
     loop {
         let now = now_ms();
         if now >= next_reconcile {
-            run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+            run_reconcile(&mut db, &config, &matcher, backend_ref(&exclusion_backend), &mut cursor)?;
             if watcher.is_none() {
                 watcher = match start_watcher(&config, cursor, &fs_tx) {
                     Ok(watcher) => watcher,
@@ -165,10 +230,18 @@ pub fn run(paths: AppPaths) -> Result<()> {
 
                 let batch = process_batch(&mut db, &config, &matcher, &events, cursor)?;
                 cursor = batch.latest_cursor;
+                if !batch.lost && batch.changed {
+                    run_auto_sync(
+                        &mut db,
+                        &config,
+                        backend_ref(&exclusion_backend),
+                        "filesystem event",
+                    );
+                }
 
                 if batch.lost {
                     warn!("FSEvents reported dropped history; reconciling");
-                    run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                    run_reconcile(&mut db, &config, &matcher, backend_ref(&exclusion_backend), &mut cursor)?;
                     next_reconcile = next_reconcile_deadline(&config);
                 }
 
@@ -184,7 +257,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
                         &mut config_mtime,
                     )?;
                     if changed {
-                        run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                        run_reconcile(&mut db, &config, &matcher, backend_ref(&exclusion_backend), &mut cursor)?;
                         next_reconcile = next_reconcile_deadline(&config);
                     }
                 }
@@ -201,7 +274,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
                     &mut config_mtime,
                 )?;
                 if changed {
-                    run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                    run_reconcile(&mut db, &config, &matcher, backend_ref(&exclusion_backend), &mut cursor)?;
                     next_reconcile = next_reconcile_deadline(&config);
                 }
             }
@@ -227,7 +300,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
                         &mut config_mtime,
                     )?;
                     if changed {
-                        run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                        run_reconcile(&mut db, &config, &matcher, backend_ref(&exclusion_backend), &mut cursor)?;
                         next_reconcile = next_reconcile_deadline(&config);
                     }
                 }
@@ -242,6 +315,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
 struct BatchOutcome {
     latest_cursor: u64,
     lost: bool,
+    changed: bool,
 }
 
 fn process_batch(
@@ -286,6 +360,7 @@ fn process_batch(
         return Ok(BatchOutcome {
             latest_cursor: latest,
             lost: true,
+            changed: false,
         });
     }
 
@@ -298,6 +373,7 @@ fn process_batch(
         return Ok(BatchOutcome {
             latest_cursor: latest,
             lost: true,
+            changed: false,
         });
     }
 
@@ -305,6 +381,7 @@ fn process_batch(
         return Ok(BatchOutcome {
             latest_cursor: latest,
             lost: false,
+            changed: false,
         });
     }
 
@@ -331,9 +408,14 @@ fn process_batch(
             "targeted discovery"
         );
     }
+    let changed = summary.matched > 0
+        || summary.missing_dirs > 0
+        || summary.new_dirs > 0
+        || summary.errors > 0;
     Ok(BatchOutcome {
         latest_cursor: latest,
         lost: false,
+        changed,
     })
 }
 
@@ -516,7 +598,58 @@ fn reload_config(
     Ok(roots_changed || rules_changed)
 }
 
-fn run_reconcile(db: &mut Db, config: &Config, matcher: &RuleSet, cursor: &mut u64) -> Result<()> {
+fn backend_ref(backend: &Option<MetadataBackend>) -> Option<&dyn ExclusionBackend> {
+    backend.as_ref().map(|backend| backend as &dyn ExclusionBackend)
+}
+
+/// Automatic exclusion is best-effort: a failure is logged and leaves the
+/// directory in the manual/export path, but it never stops discovery.
+fn run_auto_sync(
+    db: &mut Db,
+    config: &Config,
+    backend: Option<&dyn ExclusionBackend>,
+    reason: &str,
+) {
+    match exclusion::auto_sync(db, config, backend, reason) {
+        Ok(Some(report)) => {
+            if !report.add.is_empty()
+                || !report.remove.is_empty()
+                || !report.failed_adds.is_empty()
+                || !report.failed_removes.is_empty()
+            {
+                info!(
+                    reason,
+                    added = report.add.len(),
+                    removed = report.remove.len(),
+                    failed = report.failed_adds.len() + report.failed_removes.len(),
+                    desired = report.desired_count,
+                    "automatic exclusion sync"
+                );
+                for path in &report.add {
+                    info!(path = %path, "excluded");
+                }
+                for path in &report.remove {
+                    info!(path = %path, "unexcluded stale entry");
+                }
+                for path in report.failed_adds.iter().chain(report.failed_removes.iter()) {
+                    warn!(path = %path, "Spotlight did not apply the exclusion change");
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            warn!(reason, error = %error, "automatic exclusion sync failed; manual export remains available");
+        }
+    }
+}
+
+fn run_reconcile(
+    db: &mut Db,
+    config: &Config,
+    matcher: &RuleSet,
+    backend: Option<&dyn ExclusionBackend>,
+    cursor: &mut u64,
+) -> Result<()> {
     info!("starting periodic reconciliation");
     let summary = scanner::full_scan(db, config, matcher, ScanKind::Reconcile, None)?;
     info!(
@@ -527,6 +660,7 @@ fn run_reconcile(db: &mut Db, config: &Config, matcher: &RuleSet, cursor: &mut u
         errors = summary.errors,
         "reconciliation complete"
     );
+    run_auto_sync(db, config, backend, "periodic reconcile");
     *cursor = db.meta_get_u64("fsevent_last_event_id")?.unwrap_or(*cursor);
     Ok(())
 }

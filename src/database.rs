@@ -4,7 +4,8 @@
 //! All writes that reflect a filesystem discovery are batched by the scanner.
 
 use crate::model::{
-    DirectoryRecord, NewDirectory, RootRecord, ScanKind, ScanSession, ScanSummary, Status,
+    DirectoryRecord, ExclusionRecord, ExclusionSource, ExclusionState, NewDirectory, RootRecord,
+    ScanKind, ScanSession, ScanSummary, Status,
 };
 use crate::paths::AppPaths;
 use crate::util::now_ms;
@@ -14,12 +15,17 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
+const MIGRATION_002: &str = include_str!("../migrations/002_exclusions.sql");
 
 const DIRECTORY_COLUMNS: &str = "id, path, name, rule, rule_kind, scan_root_id, project_root, \
      first_seen_at, last_seen_at, status, status_before_missing, last_export_id, exported_at, \
-     manually_applied_at, verified_at, missing_at, retry_count, last_error";
+     manually_applied_at, verified_at, missing_at, retry_count, last_error, \
+     (SELECT state FROM exclusions WHERE exclusions.path = directories.path) AS exclusion_state, \
+     (SELECT managed FROM exclusions WHERE exclusions.path = directories.path) AS exclusion_managed, \
+     (SELECT verified_at FROM exclusions WHERE exclusions.path = directories.path) AS exclusion_verified_at, \
+     (SELECT error FROM exclusions WHERE exclusions.path = directories.path) AS exclusion_error";
 
 #[derive(Debug, Default, Clone)]
 pub struct UpsertStats {
@@ -141,19 +147,28 @@ impl Db {
     }
 
     fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self
+        let mut version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            bail!(
+                "database schema version {version} is newer than this executable supports ({SCHEMA_VERSION}); upgrade the application"
+            );
+        }
         if version == 0 {
             let tx = self.conn.transaction()?;
             tx.execute_batch(MIGRATION_001)
                 .context("running schema migration 001")?;
+            tx.pragma_update(None, "user_version", 1)?;
+            tx.commit()?;
+            version = 1;
+        }
+        if version == 1 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(MIGRATION_002)
+                .context("running schema migration 002")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
-        } else if version > SCHEMA_VERSION {
-            bail!(
-                "database schema version {version} is newer than this executable supports ({SCHEMA_VERSION}); upgrade the application"
-            );
         }
         Ok(())
     }
@@ -850,6 +865,210 @@ impl Db {
         Ok(())
     }
 
+    // ------------------------------------------------------------------
+    // Automatic exclusion bookkeeping (schema v2)
+    // ------------------------------------------------------------------
+
+    pub fn exclusion_get(&self, path: &str) -> Result<Option<ExclusionRecord>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT path, directory_id, managed, state, source, added_at,
+                        verified_at, last_checked_at, error
+                 FROM exclusions WHERE path = ?1",
+                params![path],
+                row_to_exclusion,
+            )
+            .optional()?)
+    }
+
+    pub fn exclusions_all(&self) -> Result<Vec<ExclusionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, directory_id, managed, state, source, added_at,
+                    verified_at, last_checked_at, error
+             FROM exclusions ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], row_to_exclusion)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Paths this application added to Spotlight's list.  User-managed entries
+    /// (`managed = 0`) are deliberately excluded.
+    pub fn managed_exclusions(&self) -> Result<Vec<ExclusionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, directory_id, managed, state, source, added_at,
+                    verified_at, last_checked_at, error
+             FROM exclusions WHERE managed = 1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], row_to_exclusion)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn count_by_exclusion_state(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT state, COUNT(*) FROM exclusions GROUP BY state")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn managed_exclusion_count(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM exclusions WHERE managed = 1", [], |row| {
+                row.get(0)
+            })?)
+    }
+
+    /// Record the result of an exclusion operation.  Existing `managed = 1`
+    /// bookkeeping is never downgraded to a user entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_exclusion(
+        &mut self,
+        path: &str,
+        directory_id: Option<i64>,
+        managed: bool,
+        state: ExclusionState,
+        source: ExclusionSource,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let now = now_ms();
+        let verified_at = if state == ExclusionState::Excluded {
+            Some(now)
+        } else {
+            None
+        };
+        self.conn.execute(
+            "INSERT INTO exclusions
+                (path, directory_id, managed, state, source, added_at,
+                 verified_at, last_checked_at, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, ?8)
+             ON CONFLICT(path) DO UPDATE SET
+                directory_id = COALESCE(excluded.directory_id, exclusions.directory_id),
+                managed = CASE WHEN exclusions.managed = 1 THEN 1 ELSE excluded.managed END,
+                state = excluded.state,
+                source = excluded.source,
+                verified_at = excluded.verified_at,
+                last_checked_at = excluded.last_checked_at,
+                error = excluded.error",
+            params![
+                path,
+                directory_id,
+                i64::from(managed),
+                state.as_str(),
+                source.as_str(),
+                now,
+                verified_at,
+                error
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_exclusion(&mut self, path: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM exclusions WHERE path = ?1", params![path])?;
+        Ok(())
+    }
+
+    pub fn directory_id_for_path(&self, path: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Mark a directory as successfully excluded.  The manual workflow's
+    /// `verified` status is reused because it already means "exclusion
+    /// confirmed"; the exclusion table retains the machine-readable detail.
+    pub fn mark_directory_exclusion_verified(&mut self, path: &str) -> Result<usize> {
+        let now = now_ms();
+        Ok(self.conn.execute(
+            "UPDATE directories
+             SET status = 'verified',
+                 verified_at = COALESCE(verified_at, ?1),
+                 manually_applied_at = COALESCE(manually_applied_at, ?1),
+                 last_error = NULL
+             WHERE path = ?2 AND status <> 'missing'",
+            params![now, path],
+        )?)
+    }
+
+    /// Automatic exclusion failed: keep the directory in the manual/export
+    /// fallback workflow rather than claiming success.
+    pub fn mark_directory_exclusion_pending(
+        &mut self,
+        path: &str,
+        error: Option<&str>,
+    ) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE directories
+             SET status = 'pending_manual_exclusion',
+                 verified_at = NULL,
+                 last_error = ?1,
+                 retry_count = retry_count + 1
+             WHERE path = ?2 AND status <> 'missing'",
+            params![error, path],
+        )?)
+    }
+
+    pub fn mark_directory_exclusion_released(&mut self, path: &str) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE directories
+             SET status = CASE WHEN status = 'missing' THEN status
+                               ELSE 'pending_manual_exclusion' END,
+                 verified_at = NULL,
+                 manually_applied_at = NULL,
+                 last_error = NULL
+             WHERE path = ?1",
+            params![path],
+        )?)
+    }
+
+    pub fn opt_out_exclusion(&mut self, path: &str, reason: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO exclusion_opt_outs (path, created_at, reason)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+                created_at = excluded.created_at,
+                reason = excluded.reason",
+            params![path, now_ms(), reason],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_exclusion_opt_out(&mut self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM exclusion_opt_outs WHERE path = ?1",
+            params![path],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_exclusion_opted_out(&self, path: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM exclusion_opt_outs WHERE path = ?1",
+                params![path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    pub fn exclusion_opt_outs(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM exclusion_opt_outs ORDER BY path")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn table_count(&self, table: &str) -> Result<i64> {
         // Only internal table names are passed here.
         let sql = format!("SELECT COUNT(*) FROM {table}");
@@ -888,6 +1107,26 @@ fn row_to_directory(row: &rusqlite::Row<'_>) -> rusqlite::Result<DirectoryRecord
         missing_at: row.get(15)?,
         retry_count: row.get(16)?,
         last_error: row.get(17)?,
+        exclusion_state: row.get(18)?,
+        exclusion_managed: row
+            .get::<_, Option<i64>>(19)?
+            .map(|value| value != 0),
+        exclusion_verified_at: row.get(20)?,
+        exclusion_error: row.get(21)?,
+    })
+}
+
+fn row_to_exclusion(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExclusionRecord> {
+    Ok(ExclusionRecord {
+        path: row.get(0)?,
+        directory_id: row.get(1)?,
+        managed: row.get::<_, i64>(2)? != 0,
+        state: row.get(3)?,
+        source: row.get(4)?,
+        added_at: row.get(5)?,
+        verified_at: row.get(6)?,
+        last_checked_at: row.get(7)?,
+        error: row.get(8)?,
     })
 }
 
@@ -915,7 +1154,7 @@ mod tests {
     #[test]
     fn migrations_and_persistence() {
         let db = db();
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), 2);
         db.meta_set("hello", "world").unwrap();
         assert_eq!(db.meta_get("hello").unwrap().as_deref(), Some("world"));
     }

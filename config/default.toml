@@ -93,3 +93,24 @@ log_level = "info"
 # NOTE: mdutil -P dumps VolumeConfiguration.plist; it does NOT expose the
 # Spotlight Search Privacy list.  It is therefore never treated as proof.
 mdutil_volume = "/"
+
+[exclusions]
+# Automatically add discovered build directories to the same Search Privacy
+# list used by System Settings.  This uses private Metadata.framework symbols
+# and is verified against Spotlight's reported list after every change.
+# See docs/PRIVATE_API.md before enabling it.
+auto = true
+
+# Run the end-to-end selftest once per macOS build.  A failure disables
+# automatic exclusion in the background service and leaves the manual export
+# workflow in place.
+run_selftest_on_os_change = true
+
+# Require a passing selftest for the current macOS build before the service
+# applies automatic exclusions.  `spotlight-dev sync` remains available
+# explicitly, and `spotlight-dev selftest` records the result.
+selftest_required = true
+
+# Remove exclusions this application added when their directory no longer
+# exists.  User-added Search Privacy entries are never removed.
+remove_stale = true
