@@ -1,9 +1,13 @@
-//! spotlight-dev-exclusions: discover development build directories and prepare
-//! a manual Spotlight Search Privacy exclusion list.
+//! spotlight-dev-exclusions: discover development build directories and
+//! automatically add them to Spotlight's Search Privacy list.
 //!
-//! The crate never writes to Spotlight configuration, private stores, `mds`, or
-//! undocumented XPC services.  All state is local SQLite under Application
-//! Support; all discovery is Rust + documented FSEvents.
+//! Automatic exclusion uses the dynamically resolved private
+//! `_MDCopyExclusionList` / `_MDSetExclusion` calls in Metadata.framework.
+//! Every change is verified against Spotlight's reported list, and a
+//! per-macOS-build selftest gates unattended use.  The crate never edits
+//! Spotlight's private plist/database and never calls undocumented XPC
+//! services.  All state is local SQLite under Application Support; all
+//! discovery is Rust + documented FSEvents.
 
 pub mod cli;
 pub mod config;

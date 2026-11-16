@@ -2,6 +2,9 @@
 /target/
 **/*.rs.bk
 
+# Release artifacts and checksums (built by scripts/build-release.sh)
+/dist/
+
 # Runtime state (never commit)
 *.sqlite3
 *.sqlite3-wal

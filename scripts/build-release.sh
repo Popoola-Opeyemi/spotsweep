@@ -59,8 +59,11 @@ cp "$REPO_DIR/LICENSE" "$DIST/stage-universal/LICENSE"
 cp "$REPO_DIR/README.md" "$DIST/stage-universal/README.md"
 cp "$REPO_DIR/docs/PRIVATE_API.md" "$DIST/stage-universal/PRIVATE_API.md"
 codesign --force --sign - --timestamp=none "$UNIVERSAL"
-ditto -c -k --sequesterRsrc --keepParent "$DIST/stage-universal" \
-  "$DIST/spotlight-dev-macos-universal.zip"
+(
+  cd "$DIST/stage-universal"
+  zip -X -q -r "$DIST/spotlight-dev-macos-universal.zip" \
+    spotlight-dev LICENSE README.md PRIVATE_API.md
+)
 
 for target in "${TARGETS[@]}"; do
   stage="$DIST/stage-$target"
@@ -71,7 +74,8 @@ for target in "${TARGETS[@]}"; do
   cp "$REPO_DIR/LICENSE" "$stage/LICENSE"
   cp "$REPO_DIR/README.md" "$stage/README.md"
   cp "$REPO_DIR/docs/PRIVATE_API.md" "$stage/PRIVATE_API.md"
-  tar -C "$DIST" -czf "$DIST/spotlight-dev-$target.tar.gz" "stage-$target"
+  tar -C "$stage" -czf "$DIST/spotlight-dev-$target.tar.gz" \
+    spotlight-dev LICENSE README.md PRIVATE_API.md
 done
 
 rm -rf "$DIST"/stage-*

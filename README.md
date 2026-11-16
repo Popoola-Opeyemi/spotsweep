@@ -23,18 +23,60 @@ Access for exclusion operations.
 
 ---
 
-## GitHub repository
+## Install
 
-The project is version-controlled and published on GitHub. The repository URL
-is the configured `origin` remote; inspect it with:
+### Homebrew
 
 ```bash
-git remote -v
-gh repo view --json url,visibility
+brew tap popoola-opeyemi/tap https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
+brew install spotlight-dev-exclusions
+brew services start spotlight-dev-exclusions
+spotlight-dev selftest
 ```
 
-The checked-in tree intentionally contains no personal paths, generated plists,
-compiled binaries, SQLite files, logs, or exports.
+### curl (universal binary)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotlight-dev-exclusions/main/scripts/install-release.sh | bash
+```
+
+The installer downloads the latest universal zip, verifies `SHA256SUMS` when
+available, installs to `~/.local/bin/spotlight-dev`, runs the self-test,
+performs an initial scan, and installs/starts the LaunchAgent. Overrides:
+`PREFIX`, `VERSION`, `DATA_DIR`, `SPOTLIGHT_DEV_NO_SERVICE`,
+`SPOTLIGHT_DEV_NO_SELFTEST`, `SPOTLIGHT_DEV_NO_SCAN`.
+
+### Build from source
+
+```bash
+git clone https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
+cd spotlight-dev-exclusions
+cargo build --release
+./target/release/spotlight-dev --version
+```
+
+Or build the universal release for both Apple Silicon and Intel:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+./scripts/build-release.sh
+```
+
+Artifacts are written to `dist/`:
+
+```
+spotlight-dev-macos-universal.zip
+spotlight-dev-aarch64-apple-darwin.tar.gz
+spotlight-dev-x86_64-apple-darwin.tar.gz
+SHA256SUMS
+```
+
+The universal binary is ad-hoc signed, not notarized. If a browser download is
+quarantined:
+
+```bash
+xattr -d com.apple.quarantine ~/Downloads/spotlight-dev-macos-universal.zip
+```
 
 ---
 
@@ -192,85 +234,6 @@ re-read of Spotlight's exclusion list, and the selftest adds an independent
 - Xcode Command Line Tools (`xcode-select --install`) for the linker
 - No administrative privileges, root, or Full Disk Access for exclusion
   operations; the LaunchAgent runs as your user
-
----
-
-## Install from a release
-
-### Homebrew
-
-```bash
-brew tap popoola-opeyemi/tap https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
-brew install spotlight-dev-exclusions
-brew services start spotlight-dev-exclusions
-spotlight-dev selftest
-```
-
-The formula installs the universal binary. `brew services` runs
-`spotlight-dev daemon` as your LaunchAgent; `brew services stop` stops it.
-The first service start runs the selftest automatically when the macOS build
-changes.
-
-### curl (universal binary)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotlight-dev-exclusions/main/scripts/install-release.sh | bash
-```
-
-The installer downloads the latest universal zip, verifies its published
-`SHA256SUMS` when available, installs to `~/.local/bin/spotlight-dev`, runs the
-self-test, performs an initial scan, and installs/starts the LaunchAgent.
-Environment overrides: `PREFIX`, `VERSION`, `DATA_DIR`, and
-`SPOTLIGHT_DEV_NO_SERVICE=1`.
-
-If you download the zip in a browser, clear the quarantine flag first:
-
-```bash
-xattr -d com.apple.quarantine ~/Downloads/spotlight-dev-macos-universal.zip
-```
-
-### Build a universal release locally
-
-```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
-./scripts/build-release.sh
-```
-
-Artifacts are written to `dist/`:
-
-```
-spotlight-dev-macos-universal.zip
-spotlight-dev-aarch64-apple-darwin.tar.gz
-spotlight-dev-x86_64-apple-darwin.tar.gz
-SHA256SUMS
-```
-
-The universal binary is ad-hoc signed, not notarized. Each architecture is
-also available as a separate tarball. `scripts/build-release.sh` uses `lipo`
-and prints the architecture list and checksums.
-
----
-
-## Build
-
-```bash
-cd ~/work/spotlight-dev-exclusions
-cargo build --release
-./target/release/spotlight-dev --version
-```
-
-The executable is `target/release/spotlight-dev`. It does not embed or require
-the source repository path.
-
-Run the test suite:
-
-```bash
-cargo test
-```
-
-Tests use temporary directory trees and temporary SQLite databases. The live
-private API is exercised by `spotlight-dev selftest`; unit/integration tests use
-an in-memory fake backend so they never alter your real Search Privacy list.
 
 ---
 

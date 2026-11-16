@@ -27,10 +27,12 @@ use std::time::Duration;
 #[command(
     name = "spotlight-dev",
     version,
-    about = "Discover development build directories and prepare a manual Spotlight Search Privacy list",
-    long_about = "spotlight-dev never modifies Spotlight configuration, mds, or private stores. \
-It discovers build artifacts, persists them in SQLite, watches for new ones with native FSEvents, \
-and exports a plain-text list for manual addition in System Settings -> Spotlight -> Search Privacy."
+    about = "Discover development build directories and exclude them from Spotlight",
+    long_about = "spotlight-dev discovers build artifacts, persists them in SQLite, watches for new ones with native FSEvents, \
+and adds them to the same Spotlight Search Privacy list used by System Settings through the privately exported \
+_MDCopyExclusionList/_MDSetExclusion calls. Every change is verified by re-reading Spotlight's list, and a selftest \
+gates unattended use. If the API is unavailable or a change is not confirmed, the existing export/mark/verify \
+fallback remains available. It never edits Spotlight's private plist or database and never requires root."
 )]
 struct Cli {
     /// Override the application data directory (default: ~/Library/Application Support/SpotlightDevExclusions)
