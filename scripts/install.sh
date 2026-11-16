@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# Install spotlight-dev-exclusions for the current user.
+#
+# The script never overwrites an existing configuration or SQLite database.
+# It builds the release binary from this repository, copies it to
+# <prefix>/bin/spotlight-dev, initialises state, installs the LaunchAgent and
+# performs the first discovery scan.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PREFIX="${PREFIX:-$HOME/.local}"
+DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
+INSTALL_SERVICE=1
+RUN_SCAN=1
+DETECT_ROOTS=1
+FORCE_BUILD=0
+LABEL="dev.spotlightdevexclusions.agent"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/install.sh [options]
+
+Options:
+  --prefix DIR       Install executable under DIR/bin (default: ~/.local)
+  --data-dir DIR     Application Support directory
+                     (default: ~/Library/Application Support/SpotlightDevExclusions)
+  --no-service       Do not install/start the LaunchAgent
+  --no-scan          Do not run the initial discovery scan/report
+  --no-detect        Do not add existing common development folders
+  --build            Force a release rebuild
+  -h, --help         Show this help
+EOF
+}
+
+expand_tilde() {
+  case "$1" in
+    "~") printf '%s\n' "$HOME" ;;
+    "~/"*) printf '%s\n' "$HOME/${1#\~/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prefix) PREFIX="$(expand_tilde "${2:?--prefix requires a value}")"; shift 2 ;;
+    --prefix=*) PREFIX="$(expand_tilde "${1#*=}")"; shift ;;
+    --data-dir) DATA_DIR="$(expand_tilde "${2:?--data-dir requires a value}")"; shift 2 ;;
+    --data-dir=*) DATA_DIR="$(expand_tilde "${1#*=}")"; shift ;;
+    --no-service) INSTALL_SERVICE=0; shift ;;
+    --no-scan) RUN_SCAN=0; shift ;;
+    --no-detect) DETECT_ROOTS=0; shift ;;
+    --build) FORCE_BUILD=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "Do not run this installer as root. It installs a user LaunchAgent." >&2
+  exit 1
+fi
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "This application targets macOS." >&2
+  exit 1
+fi
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64) WANT_ARCH="arm64" ;;
+  x86_64) WANT_ARCH="x86_64" ;;
+  *) echo "Unsupported Mac architecture: $ARCH" >&2; exit 1 ;;
+esac
+echo "Mac architecture: $ARCH"
+
+BIN_DIR="$PREFIX/bin"
+BIN="$BIN_DIR/spotlight-dev"
+SRC_BIN="$REPO_DIR/target/release/spotlight-dev"
+CARGO="${CARGO:-}"
+if [[ -z "$CARGO" ]]; then
+  if command -v cargo >/dev/null 2>&1; then
+    CARGO="$(command -v cargo)"
+  elif [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+    CARGO="$HOME/.cargo/bin/cargo"
+  else
+    echo "Rust/cargo was not found. Install the Rust toolchain first:" >&2
+    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" >&2
+    exit 1
+  fi
+fi
+
+needs_build() {
+  [[ "$FORCE_BUILD" -eq 1 ]] && return 0
+  [[ ! -x "$SRC_BIN" ]] && return 0
+  if command -v lipo >/dev/null 2>&1; then
+    local archs
+    archs="$(lipo -archs "$SRC_BIN" 2>/dev/null || true)"
+    if [[ -n "$archs" && "$archs" != *"$WANT_ARCH"* ]]; then
+      return 0
+    fi
+  fi
+  if find "$REPO_DIR/src" "$REPO_DIR/migrations" "$REPO_DIR/Cargo.toml" "$REPO_DIR/build.rs" \
+      -newer "$SRC_BIN" -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  return 1
+}
+
+if needs_build; then
+  echo "Building release binary (this can take a minute)..."
+  ( cd "$REPO_DIR" && "$CARGO" build --release )
+else
+  echo "Using existing release binary: $SRC_BIN"
+fi
+
+if [[ ! -x "$SRC_BIN" ]]; then
+  echo "Release build did not produce $SRC_BIN" >&2
+  exit 1
+fi
+if command -v lipo >/dev/null 2>&1; then
+  ARCHS="$(lipo -archs "$SRC_BIN" 2>/dev/null || true)"
+  if [[ -n "$ARCHS" && "$ARCHS" != *"$WANT_ARCH"* ]]; then
+    echo "Binary architecture ($ARCHS) does not match this Mac ($WANT_ARCH)." >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "$BIN_DIR" "$DATA_DIR" "$DATA_DIR/exports"
+TMP_BIN="$BIN_DIR/.spotlight-dev.tmp.$$"
+cp "$SRC_BIN" "$TMP_BIN"
+chmod 0755 "$TMP_BIN"
+mv -f "$TMP_BIN" "$BIN"
+echo "Installed executable: $BIN"
+
+# Never overwrite user state.  config init is called only when absent, and
+# SQLite migrations are additive.
+if [[ ! -f "$DATA_DIR/config.toml" ]]; then
+  "$BIN" --data-dir "$DATA_DIR" config init >/dev/null
+  echo "Installed default configuration: $DATA_DIR/config.toml"
+else
+  echo "Preserved existing configuration: $DATA_DIR/config.toml"
+fi
+
+# Opening the database creates the schema and runs additive migrations.
+"$BIN" --data-dir "$DATA_DIR" status >/dev/null
+echo "SQLite ready: $DATA_DIR/state.sqlite3"
+
+if [[ "$DETECT_ROOTS" -eq 1 ]]; then
+  ADDED=0
+  for candidate in \
+    "$HOME/Projects" "$HOME/Developer" "$HOME/development" "$HOME/Code" "$HOME/code" \
+    "$HOME/Work" "$HOME/work" "$HOME/src" "$HOME/dev" "$HOME/git"; do
+    if [[ -d "$candidate" ]]; then
+      "$BIN" --data-dir "$DATA_DIR" add-path "$candidate" --no-scan >/dev/null 2>&1 || true
+      ADDED=$((ADDED + 1))
+    fi
+  done
+  if [[ "$ADDED" -gt 0 ]]; then
+    echo "Checked $ADDED existing development folders as scan roots."
+  fi
+fi
+
+REPORT_PATH=""
+if [[ "$RUN_SCAN" -eq 1 ]]; then
+  echo "Running initial discovery scan..."
+  "$BIN" --data-dir "$DATA_DIR" scan
+  REPORT_PATH="$DATA_DIR/inventory-$(date +%Y%m%d-%H%M%S).txt"
+  "$BIN" --data-dir "$DATA_DIR" report --output "$REPORT_PATH" >/dev/null
+  echo "Initial inventory: $REPORT_PATH"
+fi
+
+SERVICE_OK=0
+if [[ "$INSTALL_SERVICE" -eq 1 ]]; then
+  if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+    echo "Installing LaunchAgent..."
+    if "$BIN" --data-dir "$DATA_DIR" service install --binary "$BIN"; then
+      SERVICE_OK=1
+      "$BIN" --data-dir "$DATA_DIR" service start || true
+    else
+      echo "Warning: LaunchAgent installation failed; the CLI still works." >&2
+    fi
+  else
+    echo "Warning: no GUI launchd session detected; skipped LaunchAgent installation." >&2
+    echo "You can install it later with: $BIN service install --binary $BIN" >&2
+  fi
+fi
+
+echo
+"$BIN" --data-dir "$DATA_DIR" status || true
+
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *)
+    echo
+    echo "Add the command to your PATH for future shells:"
+    echo "  echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zshrc"
+    ;;
+esac
+
+if [[ -n "$REPORT_PATH" ]]; then
+  echo
+  echo "Inventory summary (first 20 pending entries):"
+  "$BIN" --data-dir "$DATA_DIR" pending --limit 20 || true
+fi
+
+cat <<EOF
+
+Next step (manual, required):
+  1. Generate the exclusion list:
+       $BIN export
+  2. Open System Settings -> Spotlight -> Search Privacy.
+  3. Add each exported folder manually.
+  4. Record that you added them:
+       $BIN mark --all
+  5. After visually confirming the list, record verification:
+       $BIN verify --confirm
+
+This application never modifies Spotlight configuration or private stores.
+LaunchAgent installed: $([[ "$SERVICE_OK" -eq 1 ]] && echo yes || echo no)
+Data directory: $DATA_DIR
+Configuration: $DATA_DIR/config.toml
+Database: $DATA_DIR/state.sqlite3
+Logs: $(if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotlightDevExclusions" ]]; then echo "$HOME/Library/Logs/SpotlightDevExclusions"; else echo "$DATA_DIR/logs"; fi)
+EOF

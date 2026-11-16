@@ -1,0 +1,95 @@
+# Spotlight Dev Exclusions — default configuration
+#
+# This file is copied to:
+#   ~/Library/Application Support/SpotlightDevExclusions/config.toml
+# the first time the application runs.  Existing files are never overwritten
+# by an upgrade.
+#
+# Paths may start with "~".  Missing roots are skipped safely.
+# The application never writes to Spotlight's configuration or private stores.
+
+[scan]
+# Directories that contain projects.  Remove or add entries with:
+#   spotlight-dev add-path ~/NewProjects
+#   spotlight-dev remove-path ~/NewProjects
+roots = [
+  "~/Projects",
+  "~/Developer",
+  "~/Code",
+  "~/Documents",
+  "~/Desktop",
+  "~/Work",
+]
+
+# Subtrees that must never be traversed (in addition to rule matches).
+exclude_paths = []
+
+# Never follow symbolic links outside a configured root.  Symbolic links are
+# skipped entirely by default; enable this only if you intentionally keep
+# projects behind symlinks that stay inside a root.
+follow_symlinks = false
+
+# 0 means unlimited.  Useful for limiting very large roots.
+max_depth = 0
+
+# Full reconciliation cadence used by the background service.  FSEvents handles
+# normal incremental discovery; this is a safety net for dropped events.
+reconcile_interval_hours = 6
+
+# If the persisted FSEvents cursor is older than this, a reconciliation scan is
+# performed on startup instead of replaying a potentially enormous event log.
+max_event_age_hours = 24
+
+[rules]
+# Exact directory names, grouped by category.  Matching is case-sensitive and
+# applies only to directory names, never to files or source directories.
+dependencies = ["node_modules"]
+build = ["dist", "build", "out"]
+generated = ["coverage"]
+optional = ["vendor"]
+
+# Dot-prefixed directories are deliberately NOT scanned by default.  macOS
+# already skips dot-prefixed items for Spotlight, and .git/.cache trees are
+# large.  These names become active only when scan_dot_directories = true.
+dot_directories = [
+  ".next",
+  ".nuxt",
+  ".output",
+  ".cache",
+  ".turbo",
+  ".vercel",
+  ".parcel-cache",
+  ".vite",
+  ".svelte-kit",
+  ".angular",
+]
+scan_dot_directories = false
+
+# Optional glob patterns matched against directory names (not paths).
+# Examples: "*.egg-info", "dist-*", "coverage-20??".
+globs = []
+
+[export]
+# When true, comments group paths by their parent project directory.
+group_by_project = false
+# Include human instructions at the top of exported files.
+include_header = true
+# Empty means: <application support>/exports
+# A directory here is created if needed.
+directory = ""
+
+[daemon]
+# FSEvents coalescing latency.  Larger values batch more events and use less CPU.
+event_latency_ms = 300
+# Additional settle time after an event batch before discovery runs.
+event_debounce_ms = 400
+# Hard cap; if more distinct paths arrive at once, a reconciliation is safer.
+max_batch_events = 2000
+# trace | debug | info | warn | error
+log_level = "info"
+
+[verify]
+# Read-only volume path passed to `mdutil -P` by `verify --mdutil`.
+# NOTE: mdutil -P dumps VolumeConfiguration.plist; it does NOT expose the
+# Spotlight Search Privacy list.  It is therefore never treated as proof.
+mdutil_volume = "/"
