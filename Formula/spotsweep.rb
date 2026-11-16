@@ -2,7 +2,7 @@ class Spotsweep < Formula
   desc "Automatically discover development directories and manage Spotlight exclusions"
   homepage "https://github.com/Popoola-Opeyemi/spotsweep"
   url "https://github.com/Popoola-Opeyemi/spotsweep/releases/download/v0.3.0/spotsweep-macos-universal.zip"
-  sha256 "c7b3c749166407e0d34d15546e4f4a26d488613003cd3320bbee3f994f1f7322"
+  sha256 "3fd761152370325b26ef338225a66535a82629bd04c3e0f100744f7bda648f3c"
   license "MIT"
   version "0.3.0"
 
