@@ -127,6 +127,8 @@ src/
   matcher.rs      exact-name + glob rules, dot-directory policy
   scanner.rs      initial/reconciliation walks and targeted discovery
   watcher.rs      documented CoreServices FSEvents wrapper (objc2 bindings)
+  metadata.rs     dynamic private Metadata.framework exclusion API (FFI)
+  exclusion.rs    retry/verify reconcile, managed bookkeeping, selftest
   daemon.rs       LaunchAgent service loop, debounce, reconciliation, signals
   exporter.rs     plain-text exclusion lists and project grouping
   verifier.rs     mdutil research/probe; explicit manual confirmation
@@ -167,11 +169,18 @@ on the boot volume; multi-volume setups are still recovered by reconciliation.
 | `pending_manual_exclusion` | Exists and needs manual addition in Search Privacy |
 | `exported` | Included in an export file, still awaiting manual action |
 | `manually_applied` | You recorded that you added it in System Settings |
-| `verified` | You explicitly confirmed it visually in Search Privacy |
+| `verified` | Spotlight's actual exclusion list contains the path (automatic), or you explicitly confirmed it |
 | `missing` | The path no longer exists |
 
+Automatic state is also recorded per path in the `exclusions` table:
+`pending`, `excluded`, `failed` or `released`, plus whether this application
+added the entry (`managed = 1`) or it was already present (`managed = 0`).
+`sync` never removes `managed = 0` entries.
+
 A directory is **never** marked excluded or verified merely because it was
-discovered, exported, or included in a report.
+discovered, exported, or included in a report. The only automatic proof is a
+re-read of Spotlight's exclusion list, and the selftest adds an independent
+`mdfind` content check.
 
 ---
 
