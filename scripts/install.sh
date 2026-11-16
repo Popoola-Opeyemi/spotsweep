@@ -99,7 +99,7 @@ needs_build() {
       return 0
     fi
   fi
-  if find "$REPO_DIR/src" "$REPO_DIR/migrations" "$REPO_DIR/Cargo.toml" "$REPO_DIR/build.rs" \
+  if find "$REPO_DIR/src" "$REPO_DIR/migrations" "$REPO_DIR/Cargo.toml" \
       -newer "$SRC_BIN" -print -quit 2>/dev/null | grep -q .; then
     return 0
   fi

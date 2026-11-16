@@ -505,10 +505,9 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
         db.schema_version()?
     );
     println!(
-        "  Roots:     {} configured, {} existing (from {})",
-        enabled_roots.len(),
-        existing_roots,
-        config.scan.roots.len()
+        "  Roots:     {} configured, {} existing",
+        config.scan.roots.len(),
+        existing_roots
     );
     println!("  Directories: {total} tracked, {pending} pending manual exclusion");
     for status in Status::ALL {
