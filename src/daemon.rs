@@ -173,7 +173,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
                 }
 
                 if reload {
-                    reload_config(
+                    let changed = reload_config(
                         &mut db,
                         &paths,
                         &mut config,
@@ -183,12 +183,14 @@ pub fn run(paths: AppPaths) -> Result<()> {
                         &mut cursor,
                         &mut config_mtime,
                     )?;
-                    run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
-                    next_reconcile = next_reconcile_deadline(&config);
+                    if changed {
+                        run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                        next_reconcile = next_reconcile_deadline(&config);
+                    }
                 }
             }
             Ok(DaemonMsg::Reload) => {
-                reload_config(
+                let changed = reload_config(
                     &mut db,
                     &paths,
                     &mut config,
@@ -198,8 +200,10 @@ pub fn run(paths: AppPaths) -> Result<()> {
                     &mut cursor,
                     &mut config_mtime,
                 )?;
-                run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
-                next_reconcile = next_reconcile_deadline(&config);
+                if changed {
+                    run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                    next_reconcile = next_reconcile_deadline(&config);
+                }
             }
             Ok(DaemonMsg::Shutdown) => {
                 return shutdown(&mut db, "signal");
@@ -212,7 +216,7 @@ pub fn run(paths: AppPaths) -> Result<()> {
                     debug!("no existing scan roots; waiting for configuration changes");
                 }
                 if config_mtime != read_config_mtime(&paths) {
-                    reload_config(
+                    let changed = reload_config(
                         &mut db,
                         &paths,
                         &mut config,
@@ -222,8 +226,10 @@ pub fn run(paths: AppPaths) -> Result<()> {
                         &mut cursor,
                         &mut config_mtime,
                     )?;
-                    run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
-                    next_reconcile = next_reconcile_deadline(&config);
+                    if changed {
+                        run_reconcile(&mut db, &config, &matcher, &mut cursor)?;
+                        next_reconcile = next_reconcile_deadline(&config);
+                    }
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -472,14 +478,19 @@ fn reload_config(
     fs_tx: &Sender<RawEvent>,
     cursor: &mut u64,
     config_mtime: &mut Option<i64>,
-) -> Result<()> {
+) -> Result<bool> {
+    let old_roots = config.root_paths()?;
+    let old_rules = config.rules.clone();
     let fresh = match Config::load(&paths.config_path) {
         Ok(fresh) => fresh,
         Err(error) => {
             error!(error = %error, "configuration reload failed; keeping previous configuration");
-            return Ok(());
+            return Ok(false);
         }
     };
+    let new_roots = fresh.root_paths()?;
+    let roots_changed = old_roots != new_roots;
+    let rules_changed = old_rules != fresh.rules;
     *config = fresh;
     *matcher = RuleSet::from_config(&config.rules)?;
     sync_config(db, config)?;
@@ -488,19 +499,21 @@ fn reload_config(
         .meta_get_u64("fsevent_last_event_id")?
         .unwrap_or_else(current_cursor);
 
-    // Roots or rules may have changed.  Restarting from the persisted cursor
-    // replays anything that happened between the old and new stream; duplicate
-    // targeted discovery is idempotent.
-    *watcher_handle = None;
-    *watcher_handle = match start_watcher(config, *cursor, fs_tx) {
-        Ok(watcher) => watcher,
-        Err(error) => {
-            warn!(error = %error, "FSEvents restart failed; relying on periodic scans");
-            None
-        }
-    };
-    info!("configuration reloaded");
-    Ok(())
+    if roots_changed {
+        // Restarting from the persisted cursor replays anything that happened
+        // between the old and new stream; duplicate targeted discovery is
+        // idempotent, and the caller runs a reconciliation.
+        *watcher_handle = None;
+        *watcher_handle = match start_watcher(config, *cursor, fs_tx) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                warn!(error = %error, "FSEvents restart failed; relying on periodic scans");
+                None
+            }
+        };
+    }
+    info!(roots_changed, rules_changed, "configuration reloaded");
+    Ok(roots_changed || rules_changed)
 }
 
 fn run_reconcile(db: &mut Db, config: &Config, matcher: &RuleSet, cursor: &mut u64) -> Result<()> {

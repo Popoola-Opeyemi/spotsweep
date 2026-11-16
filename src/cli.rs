@@ -980,10 +980,10 @@ fn cmd_add_path(
     }
     if added {
         println!("Added scan root: {}", display_path(&normalized));
+        launchagent::signal_reload();
     } else {
         println!("Already configured: {}", display_path(&normalized));
     }
-    launchagent::signal_reload();
     if !no_scan && normalized.is_dir() {
         let summary = scanner::full_scan(
             db,
