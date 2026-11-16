@@ -105,8 +105,10 @@ if [[ "$PURGE" -eq 1 ]]; then
   fi
   rm -rf "$DATA_DIR"
   echo "Removed application data: $DATA_DIR"
-  rm -rf "$LOGS_DIR"
-  echo "Removed logs: $LOGS_DIR"
+  if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotlightDevExclusions" ]]; then
+    rm -rf "$LOGS_DIR"
+    echo "Removed logs: $LOGS_DIR"
+  fi
 else
   echo "Application data preserved: $DATA_DIR"
 fi

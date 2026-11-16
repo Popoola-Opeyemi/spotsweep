@@ -16,6 +16,21 @@ never modifies project files. Exporting a path is not the same as excluding it.
 
 ---
 
+## GitHub repository
+
+The project is version-controlled and published on GitHub. The repository URL
+is the configured `origin` remote; inspect it with:
+
+```bash
+git remote -v
+gh repo view --json url,visibility
+```
+
+The checked-in tree intentionally contains no personal paths, generated plists,
+compiled binaries, SQLite files, logs, or exports.
+
+---
+
 ## Why the manual step exists
 
 Apple does not provide a supported programmatic API or command-line interface
