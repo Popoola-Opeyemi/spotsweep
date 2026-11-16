@@ -82,7 +82,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Show directories awaiting manual Spotlight exclusion
+    /// Show directories awaiting the manual exclusion fallback
     Pending {
         #[arg(long, default_value_t = 100)]
         limit: usize,
