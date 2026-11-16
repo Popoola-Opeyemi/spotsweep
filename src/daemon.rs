@@ -7,6 +7,7 @@ use crate::database::Db;
 use crate::exclusion::{self, ExclusionBackend, SelftestOutcome};
 use crate::matcher::RuleSet;
 use crate::metadata::MetadataBackend;
+use crate::migration::{self, MigrationOutcome};
 use crate::model::ScanKind;
 use crate::paths::{AppPaths, home_dir, is_hidden_name, is_root};
 use crate::scanner;
@@ -33,6 +34,15 @@ pub fn run(paths: AppPaths) -> Result<()> {
         bail!("the background service must run as your user, not root");
     }
 
+    let migration = migration::migrate_if_needed(&paths)?;
+    if let MigrationOutcome::Conflict { old_data, new_data } = &migration {
+        bail!(
+            "SpotSweep found both legacy and new data directories and changed nothing:\n  legacy: {}\n  new:    {}\n\nMove or merge one of them, then start SpotSweep again.",
+            old_data.display(),
+            new_data.display()
+        );
+    }
+
     let mut config = Config::load_or_init(&paths)?;
     let _guard = crate::logging::init_daemon(&paths.logs_dir, &config.daemon.log_level)?;
 
@@ -40,8 +50,21 @@ pub fn run(paths: AppPaths) -> Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         pid = std::process::id(),
         data_dir = %paths.data_dir.display(),
-        "spotlight-dev daemon starting"
+        "spotsweep daemon starting"
     );
+    if !migration.is_noop() {
+        if let MigrationOutcome::Migrated(report) | MigrationOutcome::Recovered(report) = &migration
+        {
+            info!(
+                old_data = %report.old_data.display(),
+                new_data = %report.new_data.display(),
+                backup = report.backup.as_ref().map(|path| path.display().to_string()),
+                logs_copied = report.logs_copied,
+                recovered = report.recovered_interrupted,
+                "legacy data migration completed"
+            );
+        }
+    }
 
     let mut db = Db::open(&paths)?;
     let recovered = db.recover_interrupted()?;

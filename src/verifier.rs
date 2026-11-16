@@ -131,7 +131,7 @@ pub fn verify(
                 outcome: VerifyOutcome::NothingToCheck,
                 method: "manual-confirmation".into(),
                 message:
-                    "No directories are marked manually applied. Run `spotlight-dev mark --all` after adding the exported folders in System Settings."
+                    "No directories are marked manually applied. Run `spotsweep mark --all` after adding the exported folders in System Settings."
                         .into(),
                 checked: 0,
                 verified: 0,
@@ -227,9 +227,9 @@ Manual verification:
   1. Open System Settings -> Spotlight -> Search Privacy.
   2. Confirm each exported folder is present.
   3. Record that confirmation:
-       spotlight-dev verify --confirm
+       spotsweep verify --confirm
 
-Automatic verification is also available: `spotlight-dev verify PATH` reads
+Automatic verification is also available: `spotsweep verify PATH` reads
 Spotlight's actual exclusion list. This manual path never edits Spotlight
 stores or mds state."
 }

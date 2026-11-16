@@ -6,12 +6,22 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 
-pub const APP_NAME: &str = "SpotlightDevExclusions";
-pub const LAUNCH_AGENT_LABEL: &str = "dev.spotlightdevexclusions.agent";
+pub const APP_NAME: &str = "SpotSweep";
+pub const DB_FILENAME: &str = "spotsweep.db";
+pub const LAUNCH_AGENT_LABEL: &str = "com.spotsweep.agent";
 
-pub const ENV_DATA_DIR: &str = "SPOTLIGHT_DEV_EXCLUSIONS_DATA_DIR";
-pub const ENV_CONFIG: &str = "SPOTLIGHT_DEV_EXCLUSIONS_CONFIG";
-pub const ENV_LAUNCH_AGENTS_DIR: &str = "SPOTLIGHT_DEV_EXCLUSIONS_LAUNCH_AGENTS_DIR";
+/// Historical names kept only so existing installations can be migrated.
+pub const LEGACY_APP_NAME: &str = "SpotlightDevExclusions";
+pub const LEGACY_DB_FILENAME: &str = "state.sqlite3";
+pub const LEGACY_LAUNCH_AGENT_LABEL: &str = "dev.spotlightdevexclusions.agent";
+
+pub const ENV_DATA_DIR: &str = "SPOTSWEEP_DATA_DIR";
+pub const ENV_CONFIG: &str = "SPOTSWEEP_CONFIG";
+pub const ENV_LAUNCH_AGENTS_DIR: &str = "SPOTSWEEP_LAUNCH_AGENTS_DIR";
+
+pub const LEGACY_ENV_DATA_DIR: &str = "SPOTLIGHT_DEV_EXCLUSIONS_DATA_DIR";
+pub const LEGACY_ENV_CONFIG: &str = "SPOTLIGHT_DEV_EXCLUSIONS_CONFIG";
+pub const LEGACY_ENV_LAUNCH_AGENTS_DIR: &str = "SPOTLIGHT_DEV_EXCLUSIONS_LAUNCH_AGENTS_DIR";
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
@@ -22,54 +32,101 @@ pub struct AppPaths {
     pub logs_dir: PathBuf,
     pub launch_agents_dir: PathBuf,
     pub plist_path: PathBuf,
+    /// Present only when the application is using its default data location.
+    /// Custom `--data-dir`/env locations are never auto-migrated.
+    pub legacy_data_dir: Option<PathBuf>,
+    pub legacy_db_path: Option<PathBuf>,
+    pub legacy_config_path: Option<PathBuf>,
+    pub legacy_logs_dir: Option<PathBuf>,
+    pub legacy_plist_path: Option<PathBuf>,
+}
+
+fn env_path(primary: &str, legacy: &str) -> Option<PathBuf> {
+    std::env::var_os(primary)
+        .or_else(|| std::env::var_os(legacy))
+        .map(PathBuf::from)
 }
 
 impl AppPaths {
-    /// Resolve all mutable locations.  Tests use `SPOTLIGHT_DEV_EXCLUSIONS_DATA_DIR`
-    /// to keep every write inside a temporary directory.
+    /// Resolve all mutable locations.  Tests use `SPOTSWEEP_DATA_DIR` to keep
+    /// every write inside a temporary directory.
     pub fn resolve(data_dir: Option<&Path>, config_override: Option<&Path>) -> Result<Self> {
         let home = home_dir()?;
+        let default_data_dir = home.join("Library/Application Support").join(APP_NAME);
 
         let data_dir = match data_dir {
-            Some(p) => normalize_path(p)?,
-            None => match std::env::var_os(ENV_DATA_DIR) {
-                Some(v) => normalize_path(Path::new(&v))?,
-                None => home.join("Library/Application Support").join(APP_NAME),
+            Some(path) => normalize_path(path)?,
+            None => match env_path(ENV_DATA_DIR, LEGACY_ENV_DATA_DIR) {
+                Some(path) => normalize_path(&path)?,
+                None => default_data_dir.clone(),
             },
         };
 
         let config_path = match config_override {
-            Some(p) => normalize_path(p)?,
-            None => match std::env::var_os(ENV_CONFIG) {
-                Some(v) => normalize_path(Path::new(&v))?,
+            Some(path) => normalize_path(path)?,
+            None => match env_path(ENV_CONFIG, LEGACY_ENV_CONFIG) {
+                Some(path) => normalize_path(&path)?,
                 None => data_dir.join("config.toml"),
             },
         };
 
-        let using_default_data_dir =
-            data_dir == home.join("Library/Application Support").join(APP_NAME);
+        let using_default_data_dir = data_dir == default_data_dir;
         let logs_dir = if using_default_data_dir {
             home.join("Library/Logs").join(APP_NAME)
         } else {
             data_dir.join("logs")
         };
 
-        let launch_agents_dir = match std::env::var_os(ENV_LAUNCH_AGENTS_DIR) {
-            Some(v) => normalize_path(Path::new(&v))?,
+        let launch_agents_dir = match env_path(ENV_LAUNCH_AGENTS_DIR, LEGACY_ENV_LAUNCH_AGENTS_DIR)
+        {
+            Some(path) => normalize_path(&path)?,
             None => home.join("Library/LaunchAgents"),
         };
 
         let exports_dir = data_dir.join("exports");
 
+        let (
+            legacy_data_dir,
+            legacy_db_path,
+            legacy_config_path,
+            legacy_logs_dir,
+            legacy_plist_path,
+        ) = if using_default_data_dir {
+            let legacy_data = home
+                .join("Library/Application Support")
+                .join(LEGACY_APP_NAME);
+            (
+                Some(legacy_data.clone()),
+                Some(legacy_data.join(LEGACY_DB_FILENAME)),
+                Some(legacy_data.join("config.toml")),
+                Some(home.join("Library/Logs").join(LEGACY_APP_NAME)),
+                Some(launch_agents_dir.join(format!("{LEGACY_LAUNCH_AGENT_LABEL}.plist"))),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+
         Ok(Self {
-            db_path: data_dir.join("state.sqlite3"),
+            db_path: data_dir.join(DB_FILENAME),
             plist_path: launch_agents_dir.join(format!("{LAUNCH_AGENT_LABEL}.plist")),
             data_dir,
             config_path,
             exports_dir,
             logs_dir,
             launch_agents_dir,
+            legacy_data_dir,
+            legacy_db_path,
+            legacy_config_path,
+            legacy_logs_dir,
+            legacy_plist_path,
         })
+    }
+
+    pub fn legacy_service_plist_exists(&self) -> bool {
+        self.legacy_plist_path
+            .as_ref()
+            .map(|path| path.exists())
+            .unwrap_or(false)
     }
 
     /// Everything the installer, daemon and CLI may write lives below these
@@ -232,6 +289,19 @@ pub fn is_root() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spotsweep_identifiers_are_centralized() {
+        assert_eq!(APP_NAME, "SpotSweep");
+        assert_eq!(DB_FILENAME, "spotsweep.db");
+        assert_eq!(LAUNCH_AGENT_LABEL, "com.spotsweep.agent");
+        assert_eq!(LEGACY_APP_NAME, "SpotlightDevExclusions");
+        assert_eq!(LEGACY_DB_FILENAME, "state.sqlite3");
+        assert_eq!(
+            LEGACY_LAUNCH_AGENT_LABEL,
+            "dev.spotlightdevexclusions.agent"
+        );
+    }
 
     #[test]
     fn normalizes_dot_segments() {

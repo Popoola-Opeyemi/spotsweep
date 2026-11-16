@@ -7,6 +7,7 @@ use crate::exporter::{self, ExportRequest};
 use crate::launchagent;
 use crate::matcher::RuleSet;
 use crate::metadata::MetadataBackend;
+use crate::migration::{self, MigrationOutcome};
 use crate::model::{DirectoryRecord, ExclusionSource, ScanKind, Status};
 use crate::paths::{AppPaths, display_path, home_dir, normalize_path, validate_scan_root};
 use crate::scanner;
@@ -25,17 +26,17 @@ use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "spotlight-dev",
+    name = "spotsweep",
     version,
     about = "Discover development build directories and exclude them from Spotlight",
-    long_about = "spotlight-dev discovers build artifacts, persists them in SQLite, watches for new ones with native FSEvents, \
+    long_about = "SpotSweep discovers build artifacts, persists them in SQLite, watches for new ones with native FSEvents, \
 and adds them to the same Spotlight Search Privacy list used by System Settings through the privately exported \
 _MDCopyExclusionList/_MDSetExclusion calls. Every change is verified by re-reading Spotlight's list, and a selftest \
 gates unattended use. If the API is unavailable or a change is not confirmed, the existing export/mark/verify \
 fallback remains available. It never edits Spotlight's private plist or database and never requires root."
 )]
 struct Cli {
-    /// Override the application data directory (default: ~/Library/Application Support/SpotlightDevExclusions)
+    /// Override the application data directory (default: ~/Library/Application Support/SpotSweep)
     #[arg(long, global = true, value_name = "DIR")]
     data_dir: Option<PathBuf>,
 
@@ -272,10 +273,20 @@ enum ServiceCommand {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let paths = AppPaths::resolve(cli.data_dir.as_deref(), cli.config.as_deref())?;
-    // The daemon installs its own file-backed subscriber.  Installing the CLI
-    // subscriber first would make the daemon's `try_init` fail silently and
-    // send all service logs to stderr instead of the rotating log file.
+    // The daemon performs migration itself before installing its file-backed
+    // logging subscriber, so migration messages land in the new log file.
     if !matches!(cli.command, Command::Daemon) {
+        let migration = migration::migrate_if_needed(&paths)?;
+        if let MigrationOutcome::Conflict { old_data, new_data } = &migration {
+            bail!(
+                "SpotSweep found both legacy and new data directories and changed nothing:\n  legacy: {}\n  new:    {}\n\nMove or merge one of them, then run SpotSweep again. A safe recovery path is documented in README.md (Data migration).",
+                old_data.display(),
+                new_data.display()
+            );
+        }
+        if !migration.is_noop() {
+            eprintln!("SpotSweep: {}", migration.summary());
+        }
         crate::logging::init_cli(cli.verbose)?;
     }
 
@@ -405,7 +416,7 @@ fn cmd_scan(
         let summary = scanner::full_scan(db, config, matcher, kind, only_root.as_deref())?;
         print_scan_summary(&summary);
         auto_sync_after_discovery(config, db, "scan")?;
-        println!("Next: `spotlight-dev export` for the manual fallback list.");
+        println!("Next: `spotsweep export` for the manual fallback list.");
         let _ = paths;
         return Ok(());
     }
@@ -417,7 +428,7 @@ fn cmd_scan(
         .collect();
     if roots.is_empty() {
         println!(
-            "No configured scan roots exist yet. Add one with `spotlight-dev add-path ~/Projects`."
+            "No configured scan roots exist yet. Add one with `spotsweep add-path ~/Projects`."
         );
         return Ok(());
     }
@@ -459,7 +470,7 @@ fn cmd_scan(
                 summary.errors,
                 summary.duration_ms
             );
-            println!("Next: `spotlight-dev pending` or `spotlight-dev export`.");
+            println!("Next: `spotsweep pending` or `spotsweep export`.");
         }
         auto_sync_after_discovery(config, db, "incremental scan")?;
     }
@@ -474,7 +485,7 @@ fn auto_sync_after_discovery(config: &Config, db: &mut Db, reason: &str) -> Resu
     }
     if config.exclusions.selftest_required && !exclusion::selftest_passed_for_current_build(db)? {
         println!(
-            "Automatic exclusion is gated: run `spotlight-dev selftest` once for this macOS build, or use `spotlight-dev sync` explicitly."
+            "Automatic exclusion is gated: run `spotsweep selftest` once for this macOS build, or use `spotsweep sync` explicitly."
         );
         return Ok(());
     }
@@ -598,7 +609,7 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
         return Ok(());
     }
 
-    println!("Spotlight Dev Exclusions");
+    println!("SpotSweep");
     println!("  Data:      {}", paths.data_dir.display());
     println!("  Config:    {}", paths.config_path.display());
     println!(
@@ -678,7 +689,7 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
 
     if pending > 0 {
         println!(
-            "\n{pending} {} manual Spotlight exclusion.\nNext: `spotlight-dev export`",
+            "\n{pending} {} manual Spotlight exclusion.\nNext: `spotsweep export`",
             if pending == 1 {
                 "directory needs"
             } else {
@@ -686,10 +697,10 @@ fn cmd_status(paths: &AppPaths, config: &Config, db: &Db, json_output: bool) -> 
             }
         );
     } else if total == 0 {
-        println!("\nNo directories discovered yet. Run `spotlight-dev scan`.");
+        println!("\nNo directories discovered yet. Run `spotsweep scan`.");
     } else {
         println!(
-            "\nNothing is pending. Exported directories still require manual confirmation if any are marked exported."
+            "\nNothing is pending. Managed Spotlight exclusions are verified; exported entries would still need manual action."
         );
     }
     Ok(())
@@ -772,7 +783,7 @@ fn cmd_pending(db: &Db, limit: usize, json_output: bool) -> Result<()> {
     }
     if rows.is_empty() {
         println!("No directories are awaiting manual exclusion.");
-        println!("Run `spotlight-dev scan` to discover changes.");
+        println!("Run `spotsweep scan` to discover changes.");
         return Ok(());
     }
     let table: Vec<Vec<String>> = rows
@@ -790,7 +801,7 @@ fn cmd_pending(db: &Db, limit: usize, json_output: bool) -> Result<()> {
         println!("\n(limited to {shown} of {total} rows)");
     }
     println!(
-        "\nNext: `spotlight-dev export` (or `spotlight-dev export --group`).\nExporting does not change Spotlight and does not mean a directory is excluded."
+        "\nNext: `spotsweep export` (or `spotsweep export --group`).\nExporting does not change Spotlight and does not mean a directory is excluded."
     );
     Ok(())
 }
@@ -809,7 +820,7 @@ fn cmd_report(paths: &AppPaths, _config: &Config, db: &Db, output: Option<PathBu
     }
     let counts = db.count_by_status()?;
     let mut text = String::new();
-    text.push_str("# Spotlight Development Directory Inventory\n");
+    text.push_str("# SpotSweep Directory Inventory\n");
     text.push_str(&format!("# Generated: {}\n", timestamp_to_string(now_ms())));
     text.push_str(&format!("# Data: {}\n", paths.data_dir.display()));
     text.push_str(&format!("# Total directories: {}\n", rows.len()));
@@ -1016,7 +1027,7 @@ fn cmd_exclude(db: &mut Db, raw: &str, dry_run: bool) -> Result<()> {
     let report = exclusion::exclude_path(db, Path::new(raw), ExclusionSource::Cli)?;
     println!("Path: {}", report.path);
     println!("Outcome: {:?}", report.outcome);
-    println!("Managed by spotlight-dev: {}", report.managed);
+    println!("Managed by spotsweep: {}", report.managed);
     println!("{}", report.message);
     for failure in &report.api_failures {
         println!(
@@ -1254,7 +1265,7 @@ fn cmd_retry(db: &mut Db) -> Result<()> {
     if let Some(run) = db.latest_verification()? {
         if run.outcome != "verified" {
             println!(
-                "The last verification ({}) remains inconclusive. Use `spotlight-dev verify --confirm` after checking System Settings.",
+                "The last verification ({}) remains inconclusive. Use `spotsweep verify --confirm` after checking System Settings.",
                 run.outcome
             );
         }
@@ -1365,7 +1376,7 @@ fn cmd_mark(db: &mut Db, paths: Vec<String>, all: bool, export_id: Option<i64>) 
         if changed == 1 { "y" } else { "ies" }
     );
     println!("This records your assertion; it does not verify or modify Spotlight.");
-    println!("After visually confirming in System Settings, run: spotlight-dev verify --confirm");
+    println!("After visually confirming in System Settings, run: spotsweep verify --confirm");
     Ok(())
 }
 
@@ -1536,6 +1547,10 @@ fn cmd_service(paths: &AppPaths, cmd: ServiceCommand) -> Result<()> {
                 println!("PID:       {pid}");
             }
             println!("Detail:    {}", status.detail);
+            println!(
+                "Legacy:    installed={} loaded={}",
+                status.legacy_installed, status.legacy_loaded
+            );
             Ok(())
         }
         ServiceCommand::Start => {

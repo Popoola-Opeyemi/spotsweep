@@ -5,9 +5,9 @@
 //! or Spotlight configuration.
 
 use serde_json::Value;
-use spotlight_dev_exclusions::config::Config;
-use spotlight_dev_exclusions::database::Db;
-use spotlight_dev_exclusions::model::ScanKind;
+use spotsweep::config::Config;
+use spotsweep::database::Db;
+use spotsweep::model::ScanKind;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -48,14 +48,11 @@ impl TestEnv {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_spotlight-dev"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_spotsweep"));
         command
-            .env("SPOTLIGHT_DEV_EXCLUSIONS_DATA_DIR", &self.data)
-            .env("SPOTLIGHT_DEV_EXCLUSIONS_CONFIG", &self.config)
-            .env(
-                "SPOTLIGHT_DEV_EXCLUSIONS_LAUNCH_AGENTS_DIR",
-                &self.launch_agents,
-            )
+            .env("SPOTSWEEP_DATA_DIR", &self.data)
+            .env("SPOTSWEEP_CONFIG", &self.config)
+            .env("SPOTSWEEP_LAUNCH_AGENTS_DIR", &self.launch_agents)
             .env("RUST_LOG", "warn");
         command
     }
@@ -92,6 +89,17 @@ fn make_project(root: &Path, name: &str, artifact: &str) -> PathBuf {
 }
 
 #[test]
+fn cli_uses_spotsweep_name() {
+    let env = TestEnv::new();
+    let help = env.run_ok(&["--help"]);
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(text.contains("spotsweep"), "{text}");
+    assert!(!text.contains("spotlight-dev"), "{text}");
+    let version = env.run_ok(&["--version"]);
+    assert!(String::from_utf8_lossy(&version.stdout).contains("spotsweep 0.3.0"));
+}
+
+#[test]
 fn scan_status_export_mark_and_persistence() {
     let env = TestEnv::new();
     make_project(&env.root, "alpha", "node_modules");
@@ -124,7 +132,7 @@ fn scan_status_export_mark_and_persistence() {
     assert!(export_text.contains("Next steps"), "{export_text}");
     let export_path = export_text
         .lines()
-        .find(|line| line.contains("spotlight-exclusions-"))
+        .find(|line| line.contains("spotsweep-exclusions-"))
         .map(|line| line.trim())
         .unwrap();
     let content = fs::read_to_string(export_path).unwrap();
@@ -208,7 +216,7 @@ fn config_changes_control_dot_directory_scanning() {
 fn interrupted_scan_state_is_recovered_on_reopen() {
     let env = TestEnv::new();
     fs::create_dir_all(env.root.join("project/node_modules")).unwrap();
-    let db_path = env.data.join("state.sqlite3");
+    let db_path = env.data.join("spotsweep.db");
 
     let mut config = Config::default();
     config.scan.roots = vec![env.root.to_string_lossy().to_string()];

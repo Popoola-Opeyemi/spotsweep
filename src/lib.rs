@@ -1,4 +1,4 @@
-//! spotlight-dev-exclusions: discover development build directories and
+//! SpotSweep: discover development build directories and
 //! automatically add them to Spotlight's Search Privacy list.
 //!
 //! Automatic exclusion uses the dynamically resolved private
@@ -19,6 +19,7 @@ pub mod launchagent;
 pub mod logging;
 pub mod matcher;
 pub mod metadata;
+pub mod migration;
 pub mod model;
 pub mod paths;
 pub mod scanner;

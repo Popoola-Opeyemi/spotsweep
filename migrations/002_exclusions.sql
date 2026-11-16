@@ -5,7 +5,7 @@
 -- application; `managed = 0` means it was already present (for example the user
 -- added it in System Settings).  Reconcile never removes a `managed = 0` entry.
 --
--- `exclusion_opt_outs` records explicit `spotlight-dev unexclude` requests so a
+-- `exclusion_opt_outs` records explicit `spotsweep unexclude` requests so a
 -- later reconcile does not immediately add the same directory back.
 
 CREATE TABLE IF NOT EXISTS exclusions (

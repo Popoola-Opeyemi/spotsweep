@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Template only.  `spotlight-dev service install` writes the real plist to
-  ~/Library/LaunchAgents/dev.spotlightdevexclusions.agent.plist with the
+  Template only.  `spotsweep service install` writes the real plist to
+  ~/Library/LaunchAgents/com.spotsweep.agent.plist with the
   user's actual binary, data directory and config path.  Never commit the
   generated plist: it contains personal absolute paths.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>dev.spotlightdevexclusions.agent</string>
+    <string>com.spotsweep.agent</string>
     <key>ProgramArguments</key>
     <array>
         <string>__INSTALLED_BINARY__</string>

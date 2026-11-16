@@ -1,7 +1,7 @@
-# Spotlight Dev Exclusions — default configuration
+# SpotSweep — default configuration
 #
 # This file is copied to:
-#   ~/Library/Application Support/SpotlightDevExclusions/config.toml
+#   ~/Library/Application Support/SpotSweep/config.toml
 # the first time the application runs.  Existing files are never overwritten
 # by an upgrade.
 #
@@ -12,8 +12,8 @@
 
 [scan]
 # Directories that contain projects.  Remove or add entries with:
-#   spotlight-dev add-path ~/NewProjects
-#   spotlight-dev remove-path ~/NewProjects
+#   spotsweep add-path ~/NewProjects
+#   spotsweep remove-path ~/NewProjects
 roots = [
   "~/Projects",
   "~/Developer",
@@ -109,8 +109,8 @@ auto = true
 run_selftest_on_os_change = true
 
 # Require a passing selftest for the current macOS build before the service
-# applies automatic exclusions.  `spotlight-dev sync` remains available
-# explicitly, and `spotlight-dev selftest` records the result.
+# applies automatic exclusions.  `spotsweep sync` remains available
+# explicitly, and `spotsweep selftest` records the result.
 selftest_required = true
 
 # Remove exclusions this application added when their directory no longer

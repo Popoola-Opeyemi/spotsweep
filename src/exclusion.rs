@@ -622,7 +622,7 @@ pub struct ManagedRemovalReport {
 
 /// Remove every exclusion this application added.  Entries the user added in
 /// System Settings (`managed = 0`) are listed but never removed.  Used by
-/// `spotlight-dev uninstall`.
+/// `spotsweep uninstall`.
 pub fn remove_all_managed(
     db: &mut Db,
     backend: &dyn ExclusionBackend,
@@ -1055,7 +1055,7 @@ fn unique_selftest_dir(parent: &Path) -> Result<PathBuf> {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let dir = parent.join(format!(
-        "spotlight-dev-selftest-{}-{:x}",
+        "spotsweep-selftest-{}-{:x}",
         std::process::id(),
         nanos
     ));
@@ -1069,7 +1069,7 @@ fn selftest_token() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    format!("spotlightdevselftest{:x}{:x}", std::process::id(), nanos)
+    format!("spotsweepselftest{:x}{:x}", std::process::id(), nanos)
 }
 
 fn search_token(token: &str, dir: &Path) -> Option<Vec<String>> {
@@ -1189,8 +1189,8 @@ pub fn selftest_passed_for_current_build(db: &Db) -> Result<bool> {
     Ok(stored_build.as_deref() == Some(build.as_str()) && result.as_deref() == Some("pass"))
 }
 
-/// Gate for unattended automatic exclusions.  Explicit `spotlight-dev sync`
-/// and `spotlight-dev exclude` do not call this.
+/// Gate for unattended automatic exclusions.  Explicit `spotsweep sync`
+/// and `spotsweep exclude` do not call this.
 pub fn automatic_exclusions_allowed(db: &Db, config: &Config) -> Result<bool> {
     if !config.exclusions.auto {
         return Ok(false);
@@ -1425,7 +1425,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("projects");
         std::fs::create_dir_all(&root).unwrap();
-        let db_path = temp.path().join("state.sqlite3");
+        let db_path = temp.path().join("spotsweep.db");
         let path = {
             let mut db = Db::open_path(&db_path).unwrap();
             db.sync_roots(std::slice::from_ref(&root)).unwrap();

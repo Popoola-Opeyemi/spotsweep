@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# Remove the user LaunchAgent and installed executable.  The source repository,
-# project files and Spotlight Search Privacy settings are never touched.
+# Remove the user LaunchAgent and installed executable.  The source repository
+# and project files are never touched.  Only Spotlight exclusions added by this
+# application are removed.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
-DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
+DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotSweep}"
 PURGE=0
 ASSUME_YES=0
 KEEP_EXCLUSIONS=0
-LABEL="dev.spotlightdevexclusions.agent"
+LABEL="com.spotsweep.agent"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOGS_DIR="$HOME/Library/Logs/SpotlightDevExclusions"
+LEGACY_LABEL="dev.spotlightdevexclusions.agent"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+LOGS_DIR="$HOME/Library/Logs/SpotSweep"
 
 usage() {
   cat <<'EOF'
@@ -57,7 +60,8 @@ if [[ "$(id -u)" -eq 0 ]]; then
   exit 1
 fi
 
-BIN="$PREFIX/bin/spotlight-dev"
+BIN="$PREFIX/bin/spotsweep"
+OLD_BIN="$PREFIX/bin/spotlight-dev"
 
 # Stop and unload first.  Prefer the installed binary so the label and paths
 # match what was installed; fall back to launchctl manually.
@@ -65,10 +69,11 @@ if [[ -x "$BIN" && -f "$PLIST" ]]; then
   "$BIN" --data-dir "$DATA_DIR" service uninstall || true
 else
   launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  rm -f "$PLIST"
+  launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" >/dev/null 2>&1 || true
+  rm -f "$PLIST" "$LEGACY_PLIST"
 fi
 
-if [[ "$KEEP_EXCLUSIONS" -eq 0 && -x "$BIN" && -f "$DATA_DIR/state.sqlite3" ]]; then
+if [[ "$KEEP_EXCLUSIONS" -eq 0 && -x "$BIN" && -f "$DATA_DIR/spotsweep.db" ]]; then
   echo "Removing Spotlight exclusions added by this application..."
   "$BIN" --data-dir "$DATA_DIR" uninstall --keep-data || true
 else
@@ -81,7 +86,14 @@ if [[ -x "$BIN" ]]; then
 else
   echo "Executable was not installed at: $BIN"
 fi
-rm -f "$PLIST"
+if [[ -x "$OLD_BIN" ]]; then
+  if [[ -f "$HOME/Library/Application Support/SpotlightDevExclusions/state.sqlite3" ]]; then
+    "$OLD_BIN" --data-dir "$HOME/Library/Application Support/SpotlightDevExclusions" uninstall --keep-data || true
+  fi
+  rm -f "$OLD_BIN"
+  echo "Removed legacy executable: $OLD_BIN"
+fi
+rm -f "$PLIST" "$LEGACY_PLIST"
 rmdir "$PREFIX/bin" 2>/dev/null || true
 
 if [[ "$PURGE" -eq 1 ]]; then
@@ -115,7 +127,7 @@ if [[ "$PURGE" -eq 1 ]]; then
   fi
   rm -rf "$DATA_DIR"
   echo "Removed application data: $DATA_DIR"
-  if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotlightDevExclusions" ]]; then
+  if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotSweep" ]]; then
     rm -rf "$LOGS_DIR"
     echo "Removed logs: $LOGS_DIR"
   fi

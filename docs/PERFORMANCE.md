@@ -20,17 +20,17 @@ paths, usernames, or hardware serial numbers are recorded here.
 |---|---|
 | Clean `cargo build --release` | 27.4 s |
 | Incremental release rebuild | ~10.7 s |
-| Release binary (`spotlight-dev`) | 4.2 MiB (4,3xx,xxx bytes) |
+| Release binary (`spotsweep`) | 4.2 MiB (4,3xx,xxx bytes) |
 | Architecture | Mach-O 64-bit arm64 |
 | Embedded SQLite | bundled, no external database process |
-| Test suite (`cargo test`) | 46 tests, ~2 s (including a real FSEvents daemon child) |
+| Test suite (`cargo test`) | 61 unit + 6 integration tests (including a real FSEvents daemon child) |
 
 ## Full reconciliation scan
 
 Command (LaunchAgent stopped to avoid concurrent writes):
 
 ```bash
-/usr/bin/time -l ~/.local/bin/spotlight-dev rescan
+/usr/bin/time -l ~/.local/bin/spotsweep rescan
 ```
 
 | Measurement | Result |
@@ -56,7 +56,7 @@ and 0 missing.
 Measured after startup with no filesystem changes:
 
 ```bash
-top -l 5 -s 2 -pid "$(spotlight-dev service status --json | jq .pid)" \
+top -l 5 -s 2 -pid "$(spotsweep service status --json | jq .pid)" \
     -stats pid,cpu,mem,threads,time
 ```
 
@@ -80,7 +80,7 @@ thread used during startup/shutdown. All are blocked when idle.
 While the LaunchAgent was running:
 
 1. Create `~/work/<probe>/node_modules`.
-2. Poll `spotlight-dev list --json` every 50 ms.
+2. Poll `spotsweep list --json` every 50 ms.
 3. Record the elapsed time until the directory appears.
 
 | Measurement | Result |
@@ -124,10 +124,10 @@ A deletion test removed the probe tree; the daemon marked the recorded
 
 ```bash
 cargo build --release
-spotlight-dev service stop
-/usr/bin/time -l spotlight-dev rescan
-spotlight-dev service start
-spotlight-dev status
+spotsweep service stop
+/usr/bin/time -l spotsweep rescan
+spotsweep service start
+spotsweep status
 ```
 
 Results depend on cache state, number of projects, filesystem speed, and whether

@@ -118,6 +118,43 @@ impl Db {
         Self::from_connection(conn, PathBuf::from(":memory:"))
     }
 
+    /// Validate a database before it is moved into the new SpotSweep data
+    /// directory.  This runs against the disposable staged copy, so opening it
+    /// read-write is safe and lets SQLite recover a copied WAL if necessary.
+    pub fn validate_migration_db(path: &Path) -> Result<()> {
+        if !path.is_file() {
+            bail!("database does not exist: {}", path.display());
+        }
+        let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            bail!(
+                "SQLite integrity_check failed for {}: {integrity}",
+                path.display()
+            );
+        }
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            bail!(
+                "database schema version {version} is newer than this SpotSweep build supports ({SCHEMA_VERSION})"
+            );
+        }
+        for table in ["meta", "directories"] {
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                bail!(
+                    "database {} is missing the required table {table}",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn from_connection(conn: Connection, path: PathBuf) -> Result<Self> {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(

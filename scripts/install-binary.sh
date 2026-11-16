@@ -15,7 +15,7 @@ usage() {
 Usage: ./scripts/install-binary.sh [options]
 
 Options:
-  --prefix DIR    Install to DIR/bin/spotlight-dev (default: ~/.local)
+  --prefix DIR    Install to DIR/bin/spotsweep (default: ~/.local)
   --binary FILE   Install a specific compiled binary
   --build         Force a release rebuild before installing
   --restart       Restart the LaunchAgent if it is installed
@@ -70,7 +70,7 @@ if [[ -z "$CARGO" ]]; then
 fi
 
 if [[ -z "$SOURCE_BIN" ]]; then
-  SOURCE_BIN="$REPO_DIR/target/release/spotlight-dev"
+  SOURCE_BIN="$REPO_DIR/target/release/spotsweep"
   NEED_BUILD=0
   [[ "$FORCE_BUILD" -eq 1 ]] && NEED_BUILD=1
   [[ ! -x "$SOURCE_BIN" ]] && NEED_BUILD=1
@@ -101,21 +101,32 @@ if command -v lipo >/dev/null 2>&1; then
 fi
 
 BIN_DIR="$PREFIX/bin"
-BIN="$BIN_DIR/spotlight-dev"
+BIN="$BIN_DIR/spotsweep"
+OLD_BIN="$BIN_DIR/spotlight-dev"
 mkdir -p "$BIN_DIR"
-TMP_BIN="$BIN_DIR/.spotlight-dev.tmp.$$"
+TMP_BIN="$BIN_DIR/.spotsweep.tmp.$$"
 cp "$SOURCE_BIN" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
 mv -f "$TMP_BIN" "$BIN"
 echo "Installed: $BIN"
+if [[ -f "$OLD_BIN" ]]; then
+  rm -f "$OLD_BIN"
+  echo "Removed legacy executable: $OLD_BIN"
+fi
 echo "Configuration, database and exports were not modified."
 
 if [[ "$RESTART" -eq 1 ]]; then
-  PLIST="$HOME/Library/LaunchAgents/dev.spotlightdevexclusions.agent.plist"
+  PLIST="$HOME/Library/LaunchAgents/com.spotsweep.agent.plist"
+  LEGACY_PLIST="$HOME/Library/LaunchAgents/dev.spotlightdevexclusions.agent.plist"
   if [[ -f "$PLIST" ]]; then
     echo "Restarting LaunchAgent..."
     if ! "$BIN" service restart; then
       echo "Warning: LaunchAgent restart failed; run: $BIN service status" >&2
+    fi
+  elif [[ -f "$LEGACY_PLIST" ]]; then
+    echo "Migrating legacy LaunchAgent to com.spotsweep.agent..."
+    if ! "$BIN" service install --binary "$BIN"; then
+      echo "Warning: LaunchAgent migration failed; run: $BIN service install --binary $BIN" >&2
     fi
   else
     echo "LaunchAgent is not installed; restart skipped."

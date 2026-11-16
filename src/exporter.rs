@@ -56,7 +56,7 @@ pub fn render(
 
     let mut out = String::new();
     if include_header {
-        out.push_str("# Spotlight Development Exclusions\n");
+        out.push_str("# SpotSweep Exclusions\n");
         out.push_str(&format!(
             "# Generated: {}\n",
             timestamp_to_string(generated_at)
@@ -67,8 +67,8 @@ pub fn render(
         out.push_str("#\n");
         out.push_str("# The exporter never changes Spotlight configuration.  A path is not\n");
         out.push_str("# excluded until you add it in System Settings and mark it applied:\n");
-        out.push_str("#   spotlight-dev mark --all          (after adding the folders)\n");
-        out.push_str("#   spotlight-dev verify --confirm    (after visual confirmation)\n");
+        out.push_str("#   spotsweep mark --all          (after adding the folders)\n");
+        out.push_str("#   spotsweep verify --confirm    (after visual confirmation)\n");
         out.push_str("#\n");
         out.push_str(&format!("# Directories: {}\n", directories.len()));
         out.push('\n');
@@ -123,7 +123,7 @@ pub fn export(
 
     if directories.is_empty() {
         bail!(
-            "no directories match the export selection ({}); run `spotlight-dev scan` first",
+            "no directories match the export selection ({}); run `spotsweep scan` first",
             request.label()
         );
     }
@@ -134,7 +134,7 @@ pub fn export(
     let export_dir = config.export_dir(paths)?;
     ensure_dir(&export_dir, 0o700)?;
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%3f").to_string();
-    let filename = format!("spotlight-exclusions-{timestamp}.txt");
+    let filename = format!("spotsweep-exclusions-{timestamp}.txt");
     let destination = match output {
         Some(path) => {
             let path = crate::paths::normalize_path(path)?;
@@ -183,9 +183,9 @@ Next steps (manual; no private APIs are used):
   1. Open System Settings -> Spotlight -> Search Privacy.
   2. Click + (or drag folders from Finder) and add each exported folder.
   3. After adding them, record the manual action:
-       spotlight-dev mark --all
+       spotsweep mark --all
   4. After visually confirming the folders are listed, record verification:
-       spotlight-dev verify --confirm
+       spotsweep verify --confirm
 
 Exporting does not change Spotlight configuration and is not proof of exclusion.",
         path.display()
@@ -232,7 +232,7 @@ mod tests {
             sample("/Users/a/Projects/a/node_modules", "/Users/a/Projects/a"),
         ];
         let flat = render(&rows, false, true, 0).unwrap();
-        assert!(flat.contains("# Spotlight Development Exclusions"));
+        assert!(flat.contains("# SpotSweep Exclusions"));
         assert!(flat.contains("/Users/a/Projects/b/node_modules"));
         assert!(!flat.contains("# Project:"));
 
@@ -260,6 +260,11 @@ mod tests {
             logs_dir: temp.path().join("logs"),
             launch_agents_dir: temp.path().join("LaunchAgents"),
             plist_path: temp.path().join("LaunchAgents/x.plist"),
+            legacy_data_dir: None,
+            legacy_db_path: None,
+            legacy_config_path: None,
+            legacy_logs_dir: None,
+            legacy_plist_path: None,
         };
         let mut db = Db::open_in_memory().unwrap();
         db.sync_roots(&[PathBuf::from("/Users/a/Projects")])

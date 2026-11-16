@@ -104,7 +104,7 @@ impl ExclusionState {
 pub enum ExclusionSource {
     /// Added because a discovered build directory matched a rule.
     Auto,
-    /// Added because the user ran `spotlight-dev exclude`.
+    /// Added because the user ran `spotsweep exclude`.
     Cli,
     /// Already present in Spotlight's list before this application saw it.
     User,

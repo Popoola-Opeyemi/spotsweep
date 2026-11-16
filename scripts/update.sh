@@ -60,12 +60,12 @@ fi
 echo "Installing the latest release binary..."
 "$SCRIPT_DIR/install-binary.sh" --build --prefix "$PREFIX" --restart
 
-DATA_DIR="$HOME/Library/Application Support/SpotlightDevExclusions"
-BIN="$PREFIX/bin/spotlight-dev"
+DATA_DIR="$HOME/Library/Application Support/SpotSweep"
+BIN="$PREFIX/bin/spotsweep"
 if [[ -x "$BIN" ]]; then
   echo
   "$BIN" --data-dir "$DATA_DIR" status || true
   echo
   echo "Upgrade complete. Configuration and scan history were preserved."
-  echo "Database: $DATA_DIR/state.sqlite3"
+  echo "Database: $DATA_DIR/spotsweep.db"
 fi

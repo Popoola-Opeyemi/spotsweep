@@ -1,7 +1,7 @@
 //! Minimal logging setup.
 //!
 //! CLI messages go to stderr.  The daemon writes daily-rotated files under
-//! `~/Library/Logs/SpotlightDevExclusions/` (outside the repository) and keeps
+//! `~/Library/Logs/SpotSweep/` (outside the repository) and keeps
 //! seven days of history.  `tracing-appender`'s non-blocking writer uses one
 //! small background thread; the FSEvents callback never touches disk.
 
@@ -25,6 +25,7 @@ pub fn init_cli(verbosity: u8) -> Result<()> {
         _ => "trace",
     };
     let filter = EnvFilter::try_from_env("RUST_LOG")
+        .or_else(|_| EnvFilter::try_from_env("SPOTSWEEP_LOG"))
         .or_else(|_| EnvFilter::try_from_env("SPOTLIGHT_DEV_LOG"))
         .unwrap_or_else(|_| EnvFilter::new(default_level));
     let _ = fmt()
@@ -46,6 +47,7 @@ pub fn init_daemon(log_dir: &Path, level: &str) -> Result<LogGuard> {
         .with_context(|| format!("creating rolling log in {}", log_dir.display()))?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     let filter = EnvFilter::try_from_env("RUST_LOG")
+        .or_else(|_| EnvFilter::try_from_env("SPOTSWEEP_LOG"))
         .or_else(|_| EnvFilter::try_from_env("SPOTLIGHT_DEV_LOG"))
         .unwrap_or_else(|_| EnvFilter::new(level));
     let _ = fmt()

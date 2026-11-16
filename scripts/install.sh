@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# Install spotlight-dev-exclusions for the current user.
+# Install SpotSweep for the current user.
 #
 # The script never overwrites an existing configuration or SQLite database.
 # It builds the release binary from this repository, copies it to
-# <prefix>/bin/spotlight-dev, initialises state, installs the LaunchAgent and
+# <prefix>/bin/spotsweep, initialises state, installs the LaunchAgent and
 # performs the first discovery scan.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
-DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
+DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotSweep}"
 INSTALL_SERVICE=1
 RUN_SCAN=1
 RUN_SELFTEST=1
 DETECT_ROOTS=1
 FORCE_BUILD=0
-LABEL="dev.spotlightdevexclusions.agent"
+LABEL="com.spotsweep.agent"
+LEGACY_LABEL="dev.spotlightdevexclusions.agent"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
 
 usage() {
   cat <<'EOF'
@@ -25,7 +27,7 @@ Usage: ./scripts/install.sh [options]
 Options:
   --prefix DIR       Install executable under DIR/bin (default: ~/.local)
   --data-dir DIR     Application Support directory
-                     (default: ~/Library/Application Support/SpotlightDevExclusions)
+                     (default: ~/Library/Application Support/SpotSweep)
   --no-service       Do not install/start the LaunchAgent
   --no-scan          Do not run the initial discovery scan/report
   --no-selftest      Do not run the Spotlight exclusion selftest
@@ -76,9 +78,15 @@ case "$ARCH" in
 esac
 echo "Mac architecture: $ARCH"
 
+# Stop the pre-rename agent before its data directory is migrated.
+if launchctl print "gui/$(id -u)/$LEGACY_LABEL" >/dev/null 2>&1; then
+  echo "Stopping legacy SpotlightDevExclusions LaunchAgent..."
+  launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" >/dev/null 2>&1 || true
+fi
+
 BIN_DIR="$PREFIX/bin"
-BIN="$BIN_DIR/spotlight-dev"
-SRC_BIN="$REPO_DIR/target/release/spotlight-dev"
+BIN="$BIN_DIR/spotsweep"
+SRC_BIN="$REPO_DIR/target/release/spotsweep"
 CARGO="${CARGO:-}"
 if [[ -z "$CARGO" ]]; then
   if command -v cargo >/dev/null 2>&1; then
@@ -128,25 +136,28 @@ if command -v lipo >/dev/null 2>&1; then
   fi
 fi
 
-mkdir -p "$BIN_DIR" "$DATA_DIR" "$DATA_DIR/exports"
-TMP_BIN="$BIN_DIR/.spotlight-dev.tmp.$$"
+mkdir -p "$BIN_DIR"
+TMP_BIN="$BIN_DIR/.spotsweep.tmp.$$"
 cp "$SRC_BIN" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
 mv -f "$TMP_BIN" "$BIN"
 echo "Installed executable: $BIN"
 
-# Never overwrite user state.  config init is called only when absent, and
-# SQLite migrations are additive.
-if [[ ! -f "$DATA_DIR/config.toml" ]]; then
-  "$BIN" --data-dir "$DATA_DIR" config init >/dev/null
-  echo "Installed default configuration: $DATA_DIR/config.toml"
-else
-  echo "Preserved existing configuration: $DATA_DIR/config.toml"
+OLD_BIN="$BIN_DIR/spotlight-dev"
+if [[ -f "$OLD_BIN" ]]; then
+  rm -f "$OLD_BIN"
+  echo "Removed legacy executable: $OLD_BIN"
 fi
 
-# Opening the database creates the schema and runs additive migrations.
+# `status` triggers legacy data migration and creates the default config and
+# database only when no old data was migrated.  Never overwrite either.
 "$BIN" --data-dir "$DATA_DIR" status >/dev/null
-echo "SQLite ready: $DATA_DIR/state.sqlite3"
+if [[ -f "$DATA_DIR/config.toml" ]]; then
+  echo "Configuration ready: $DATA_DIR/config.toml"
+else
+  echo "Warning: configuration was not created at $DATA_DIR/config.toml" >&2
+fi
+echo "SQLite ready: $DATA_DIR/spotsweep.db"
 
 SELFTEST_OK=0
 if [[ "$RUN_SELFTEST" -eq 1 ]]; then
@@ -186,6 +197,11 @@ if [[ "$RUN_SCAN" -eq 1 ]]; then
   REPORT_PATH="$DATA_DIR/inventory-$(date +%Y%m%d-%H%M%S).txt"
   "$BIN" --data-dir "$DATA_DIR" report --output "$REPORT_PATH" >/dev/null
   echo "Initial inventory: $REPORT_PATH"
+fi
+
+if [[ -f "$LEGACY_PLIST" ]]; then
+  rm -f "$LEGACY_PLIST"
+  echo "Removed legacy LaunchAgent plist: $LEGACY_PLIST"
 fi
 
 SERVICE_OK=0
@@ -241,6 +257,6 @@ by re-reading Spotlight's list. No plist or private database is edited.
 LaunchAgent installed: $([[ "$SERVICE_OK" -eq 1 ]] && echo yes || echo no)
 Data directory: $DATA_DIR
 Configuration: $DATA_DIR/config.toml
-Database: $DATA_DIR/state.sqlite3
-Logs: $(if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotlightDevExclusions" ]]; then echo "$HOME/Library/Logs/SpotlightDevExclusions"; else echo "$DATA_DIR/logs"; fi)
+Database: $DATA_DIR/spotsweep.db
+Logs: $(if [[ "$DATA_DIR" == "$HOME/Library/Application Support/SpotSweep" ]]; then echo "$HOME/Library/Logs/SpotSweep"; else echo "$DATA_DIR/logs"; fi)
 EOF

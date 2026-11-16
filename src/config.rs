@@ -376,7 +376,7 @@ impl Config {
         }
     }
 
-    /// Small, explicit key/value API used by `spotlight-dev config set`.
+    /// Small, explicit key/value API used by `spotsweep config set`.
     pub fn set_key(&mut self, key: &str, value: &str) -> Result<()> {
         let key = key.trim();
         let value = value.trim();

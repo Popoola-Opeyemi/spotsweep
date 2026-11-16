@@ -1,9 +1,11 @@
-# spotlight-dev-exclusions
+# SpotSweep
 
-A small, native Rust utility that discovers development directories which should
-be excluded from Spotlight indexing, tracks them in SQLite, watches for new ones
-with macOS FSEvents, and adds them to the same **Spotlight Search Privacy** list
-used by System Settings.
+**SpotSweep is a lightweight macOS utility that automatically discovers
+development directories and manages their exclusion from Spotlight indexing.**
+
+It tracks discovered directories in SQLite, watches for new ones with macOS
+FSEvents, and adds them to the same **Spotlight Search Privacy** list used by
+System Settings.
 
 Automatic exclusion uses the private `_MDCopyExclusionList` / `_MDSetExclusion`
 calls in `Metadata.framework`, the same mechanism used by
@@ -16,8 +18,8 @@ It never edits `VolumeConfiguration.plist`, never writes to Spotlight's private
 databases, never modifies project files, and never requires root or Full Disk
 Access for exclusion operations.
 
-- **Project path (example):** `~/work/spotlight-dev-exclusions`
-- **Binary name:** `spotlight-dev`
+- **Project path (example):** `~/work/spotsweep`
+- **Binary name:** `spotsweep`
 - **Target:** universal macOS build (Apple Silicon + Intel)
 - **Runtime:** no Docker, Node.js, Python, or database server
 
@@ -28,31 +30,32 @@ Access for exclusion operations.
 ### Homebrew
 
 ```bash
-brew tap popoola-opeyemi/tap https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
-brew install spotlight-dev-exclusions
-brew services start spotlight-dev-exclusions
-spotlight-dev selftest
+brew tap popoola-opeyemi/tap https://github.com/Popoola-Opeyemi/spotsweep
+brew install spotsweep
+brew services start spotsweep
+spotsweep selftest
 ```
 
 ### curl (universal binary)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotlight-dev-exclusions/main/scripts/install-release.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotsweep/main/scripts/install-release.sh | bash
 ```
 
 The installer downloads the latest universal zip, verifies `SHA256SUMS` when
-available, installs to `~/.local/bin/spotlight-dev`, runs the self-test,
+available, installs to `~/.local/bin/spotsweep`, runs the self-test,
 performs an initial scan, and installs/starts the LaunchAgent. Overrides:
-`PREFIX`, `VERSION`, `DATA_DIR`, `SPOTLIGHT_DEV_NO_SERVICE`,
-`SPOTLIGHT_DEV_NO_SELFTEST`, `SPOTLIGHT_DEV_NO_SCAN`.
+`PREFIX`, `VERSION`, `DATA_DIR`, `REPOSITORY`, `SPOTSWEEP_NO_SERVICE`,
+`SPOTSWEEP_NO_SELFTEST`, `SPOTSWEEP_NO_SCAN`. The legacy `SPOTLIGHT_DEV_NO_*`
+variables are still accepted.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
-cd spotlight-dev-exclusions
+git clone https://github.com/Popoola-Opeyemi/spotsweep
+cd spotsweep
 cargo build --release
-./target/release/spotlight-dev --version
+./target/release/spotsweep --version
 ```
 
 Or build the universal release for both Apple Silicon and Intel:
@@ -65,9 +68,9 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 Artifacts are written to `dist/`:
 
 ```
-spotlight-dev-macos-universal.zip
-spotlight-dev-aarch64-apple-darwin.tar.gz
-spotlight-dev-x86_64-apple-darwin.tar.gz
+spotsweep-macos-universal.zip
+spotsweep-aarch64-apple-darwin.tar.gz
+spotsweep-x86_64-apple-darwin.tar.gz
 SHA256SUMS
 ```
 
@@ -75,8 +78,24 @@ The universal binary is ad-hoc signed, not notarized. If a browser download is
 quarantined:
 
 ```bash
-xattr -d com.apple.quarantine ~/Downloads/spotlight-dev-macos-universal.zip
+xattr -d com.apple.quarantine ~/Downloads/spotsweep-macos-universal.zip
 ```
+
+### GitHub repository rename (manual action)
+
+The source tree and installers use `Popoola-Opeyemi/spotsweep`. Renaming the
+GitHub repository from `spotlight-dev-exclusions` to `spotsweep` is a GitHub
+setting and is not performed by this repository's code. Until that rename
+happens, release downloads and the Homebrew formula URL can be overridden:
+
+```bash
+REPOSITORY=Popoola-Opeyemi/spotlight-dev-exclusions \
+  bash scripts/install-release.sh
+```
+
+For Homebrew, update `url` and `homepage` in `Formula/spotsweep.rb` (or the tap
+copy) to the actual repository. The release workflow itself uses
+`github.repository`, so it works either before or after the rename.
 
 ---
 
@@ -92,7 +111,7 @@ _MDCopyExclusionList()                    -> CFArrayRef
 _MDSetExclusion(CFStringRef, uint32_t)    -> int32_t
 ```
 
-`spotlight-dev` resolves those symbols dynamically (no private SDK headers, no
+`spotsweep` resolves those symbols dynamically (no private SDK headers, no
 link-time dependency), calls them as your user, and **re-reads the exclusion
 list after every request**. A non-zero API return value is never treated as
 proof; a path is recorded as excluded only when Spotlight's list contains it.
@@ -120,7 +139,7 @@ Researched and tested. `mdutil -P <volume>` dumps the volume's
 **`VolumeConfiguration.plist`** (index store configuration). It does **not**
 expose the Search Privacy exclusion list, it requires root, and its output is
 not a stable public interface. It is therefore never used as proof of an
-exclusion. `spotlight-dev verify --mdutil` shows the diagnostic result but
+exclusion. `spotsweep verify --mdutil` shows the diagnostic result but
 remains inconclusive.
 
 ### Risks of the private API
@@ -255,8 +274,8 @@ What it does:
 
 1. Detects the Mac architecture and checks the release binary.
 2. Builds with `cargo build --release` if needed.
-3. Creates `~/.local/bin` (or `<prefix>/bin`) and installs `spotlight-dev`.
-4. Creates `~/Library/Application Support/SpotlightDevExclusions/`.
+3. Creates `~/.local/bin` (or `<prefix>/bin`) and installs `spotsweep`.
+4. Creates `~/Library/Application Support/SpotSweep/`.
 5. Installs the default TOML config **only if missing**.
 6. Initialises/migrates SQLite.
 7. Runs the Spotlight exclusion selftest (10–35 seconds) when automatic
@@ -284,11 +303,11 @@ source ~/.zshrc
 
 ```bash
 # From anywhere:
-~/work/spotlight-dev-exclusions/scripts/install-binary.sh \
+~/work/spotsweep/scripts/install-binary.sh \
   --prefix "$HOME/.local" --build --restart
 
 # Or install a binary built elsewhere:
-./scripts/install-binary.sh --binary /path/to/spotlight-dev --prefix "$HOME/.local"
+./scripts/install-binary.sh --binary /path/to/spotsweep --prefix "$HOME/.local"
 ```
 
 This copies only the executable. Configuration, SQLite state, exports and logs
@@ -298,23 +317,59 @@ repository may be moved or deleted after installation.
 ### Manual relocation
 
 ```bash
-cp target/release/spotlight-dev /some/other/place/spotlight-dev
-/some/other/place/spotlight-dev --data-dir "$HOME/Library/Application Support/SpotlightDevExclusions" status
+cp target/release/spotsweep /some/other/place/spotsweep
+/some/other/place/spotsweep --data-dir "$HOME/Library/Application Support/SpotSweep" status
 ```
 
 If you relocate the installed binary, reinstall the LaunchAgent so its
 `ProgramArguments` point at the new path:
 
 ```bash
-spotlight-dev service install --binary /some/other/place/spotlight-dev
+spotsweep service install --binary /some/other/place/spotsweep
 ```
+
+---
+
+## Data migration from SpotlightDevExclusions
+
+Existing `spotlight-dev` installations are migrated automatically on the first
+`spotsweep` command. No manual export/import is required.
+
+- Old data: `~/Library/Application Support/SpotlightDevExclusions`
+- New data: `~/Library/Application Support/SpotSweep`
+- Old database `state.sqlite3` becomes `spotsweep.db`.
+- Configuration, exports and logs are preserved where possible.
+- The old directory is renamed to
+  `SpotlightDevExclusions.backup-<timestamp>` and kept for recovery.
+- Migration validates the new database with `PRAGMA integrity_check` before
+  switching, and is safe to re-run after an interruption.
+- If both old and new directories contain data, SpotSweep refuses to overwrite
+  either and prints both paths. Resolve the conflict manually, then run
+  `spotsweep status` again.
+
+The old `spotlight-dev` command is intentionally not kept as an alias. Use
+`spotsweep` from now on. The old LaunchAgent
+`dev.spotlightdevexclusions.agent` is unloaded and removed after the new
+`com.spotsweep.agent` starts successfully.
+
+For Homebrew users, package names differ during the rename:
+
+```bash
+brew uninstall spotlight-dev-exclusions
+brew install spotsweep
+brew services start spotsweep
+spotsweep status
+```
+
+If data was already migrated and you later want to restore the old install,
+stop the service and move the backup directory back into place.
 
 ---
 
 ## Upgrade
 
 ```bash
-cd ~/work/spotlight-dev-exclusions
+cd ~/work/spotsweep
 ./scripts/update.sh
 ```
 
@@ -334,9 +389,9 @@ checkout without pulling:
 Run the self-test once for the current macOS build, then scan:
 
 ```bash
-spotlight-dev selftest
-spotlight-dev scan
-spotlight-dev status
+spotsweep selftest
+spotsweep scan
+spotsweep status
 ```
 
 The daemon does the same automatically at startup (after an OS update it
@@ -345,16 +400,16 @@ seconds of an FSEvents notification, and every request is verified by
 re-reading Spotlight's list. Use `sync` to reconcile immediately:
 
 ```bash
-spotlight-dev sync              # add missing, prune stale, preserve user entries
-spotlight-dev sync --dry-run    # preview only
+spotsweep sync              # add missing, prune stale, preserve user entries
+spotsweep sync --dry-run    # preview only
 ```
 
 Explicit path operations:
 
 ```bash
-spotlight-dev exclude ~/work/app/node_modules
-spotlight-dev verify ~/work/app/node_modules
-spotlight-dev unexclude ~/work/app/node_modules
+spotsweep exclude ~/work/app/node_modules
+spotsweep verify ~/work/app/node_modules
+spotsweep unexclude ~/work/app/node_modules
 ```
 
 `unexclude` records an opt-out, so the next `sync` does not immediately add the
@@ -369,24 +424,24 @@ unchanged:
 1. Discover directories:
 
    ```bash
-   spotlight-dev scan
-   spotlight-dev pending
+   spotsweep scan
+   spotsweep pending
    ```
 
 2. Generate the list:
 
    ```bash
-   spotlight-dev export
+   spotsweep export
    # or group by project:
-   spotlight-dev export --group
+   spotsweep export --group
    # only one rule/category:
-   spotlight-dev export --type node_modules
+   spotsweep export --type node_modules
    # all existing directories, not only pending:
-   spotlight-dev export --all
+   spotsweep export --all
    ```
 
    Files are written to
-   `~/Library/Application Support/SpotlightDevExclusions/exports/` unless
+   `~/Library/Application Support/SpotSweep/exports/` unless
    `--output` is given.
 
 3. Open **System Settings → Spotlight → Search Privacy** and add each folder
@@ -395,15 +450,15 @@ unchanged:
 4. Record the manual action:
 
    ```bash
-   spotlight-dev mark --all
+   spotsweep mark --all
    # or specific paths:
-   spotlight-dev mark ~/work/app/node_modules
+   spotsweep mark ~/work/app/node_modules
    ```
 
 5. After visually confirming each folder is listed in Search Privacy:
 
    ```bash
-   spotlight-dev verify --confirm
+   spotsweep verify --confirm
    ```
 
 `verify --confirm` remains available for the manual path. `verify` with a path
@@ -418,54 +473,54 @@ confirmed excluded.
 Global flags (before or after the subcommand):
 
 ```
---data-dir DIR     Override ~/Library/Application Support/SpotlightDevExclusions
+--data-dir DIR     Override ~/Library/Application Support/SpotSweep
 --config FILE      Override config.toml
 -v, -vv, -vvv      Log verbosity (info, debug, trace)
 ```
 
 | Command | Description |
 |---|---|
-| `spotlight-dev scan` | Incremental scan. First run is a full scan; later runs replay FSEvents from the stored cursor and walk only affected subtrees. Stale cursors trigger reconciliation. |
-| `spotlight-dev scan --full` | Force a complete reconciliation walk. |
-| `spotlight-dev scan --root ~/work` | Walk one configured root. |
-| `spotlight-dev rescan` | Force reconciliation of all roots (`--root` for one). |
-| `spotlight-dev status` | Totals, roots, service state, cursor, exports, verification. `--json` for machines. |
-| `spotlight-dev list` | List directories. Filters: `--status`, `--rule`, `--root`, `--project`, `--limit`, `--json`. |
-| `spotlight-dev pending` | Paths awaiting manual exclusion (`--limit`, `--json`). |
-| `spotlight-dev report` | Inventory grouped by project (`--output FILE`). |
-| `spotlight-dev export` | Generate a plain-text list. Flags: `--all`, `--pending`, `--type RULE`, `--group`, `--flat`, `--no-header`, `--output FILE`, `--open`. |
-| `spotlight-dev exclude PATH` | Add a directory to Spotlight's Search Privacy list; verifies by re-reading the list. `--dry-run` previews. |
-| `spotlight-dev unexclude PATH` | Remove a directory and record an opt-out so `sync` will not re-add it. |
-| `spotlight-dev verify PATH` | Read Spotlight's actual exclusion list and an `mdfind` count. Outcomes: `excluded`, `not_excluded`, `inconsistent`. `--strict` exits 3 unless excluded. |
-| `spotlight-dev verify --confirm` | Record visual confirmation for the manual workflow. `--mdutil` probes `mdutil -P` read-only (root only, never proof). |
-| `spotlight-dev sync` | Reconcile all discovered directories with Spotlight's list. `--dry-run`, `--json`. Never removes user-managed entries. |
-| `spotlight-dev selftest` | Prove the private API works on this macOS build using a control folder and `mdfind` (10–35 s). `--json`. |
-| `spotlight-dev state` | SQLite schema, meta, table counts, recent scans/exports, FSEvents cursor. `--json`. |
-| `spotlight-dev retry` | Re-check `missing` paths; restore directories that exist again. |
-| `spotlight-dev logs` | Tail the rotating daemon log (`--lines N`, `--follow`). |
-| `spotlight-dev add-path ~/NewProjects` | Add a root (stored in config + SQLite) and scan it. `--no-scan` to defer. |
-| `spotlight-dev remove-path ~/NewProjects` | Remove a root without deleting project files or historical records. |
-| `spotlight-dev config` | Show effective TOML (`show`), `path`, `init`, `set KEY VALUE`, `edit`, `reload`. |
-| `spotlight-dev mark --all` | Record manual addition to Search Privacy (paths or `--export ID` also supported). |
-| `spotlight-dev service install` | Generate and load the user LaunchAgent (`--binary FILE` optional). |
-| `spotlight-dev service status` | Installed/loaded/running/PID (`--json`). |
-| `spotlight-dev service start` / `stop` / `restart` | launchctl lifecycle. |
-| `spotlight-dev service uninstall` | Remove the plist; data preserved. |
-| `spotlight-dev uninstall` | Remove the LaunchAgent and app-managed Spotlight exclusions (user entries are preserved). `--keep-exclusions` skips removal; `--purge-data --yes` deletes app data; `--remove-binary` deletes the executable. |
-| `spotlight-dev daemon` | Run the service in the foreground (used by LaunchAgent). |
+| `spotsweep scan` | Incremental scan. First run is a full scan; later runs replay FSEvents from the stored cursor and walk only affected subtrees. Stale cursors trigger reconciliation. |
+| `spotsweep scan --full` | Force a complete reconciliation walk. |
+| `spotsweep scan --root ~/work` | Walk one configured root. |
+| `spotsweep rescan` | Force reconciliation of all roots (`--root` for one). |
+| `spotsweep status` | Totals, roots, service state, cursor, exports, verification. `--json` for machines. |
+| `spotsweep list` | List directories. Filters: `--status`, `--rule`, `--root`, `--project`, `--limit`, `--json`. |
+| `spotsweep pending` | Paths awaiting manual exclusion (`--limit`, `--json`). |
+| `spotsweep report` | Inventory grouped by project (`--output FILE`). |
+| `spotsweep export` | Generate a plain-text list. Flags: `--all`, `--pending`, `--type RULE`, `--group`, `--flat`, `--no-header`, `--output FILE`, `--open`. |
+| `spotsweep exclude PATH` | Add a directory to Spotlight's Search Privacy list; verifies by re-reading the list. `--dry-run` previews. |
+| `spotsweep unexclude PATH` | Remove a directory and record an opt-out so `sync` will not re-add it. |
+| `spotsweep verify PATH` | Read Spotlight's actual exclusion list and an `mdfind` count. Outcomes: `excluded`, `not_excluded`, `inconsistent`. `--strict` exits 3 unless excluded. |
+| `spotsweep verify --confirm` | Record visual confirmation for the manual workflow. `--mdutil` probes `mdutil -P` read-only (root only, never proof). |
+| `spotsweep sync` | Reconcile all discovered directories with Spotlight's list. `--dry-run`, `--json`. Never removes user-managed entries. |
+| `spotsweep selftest` | Prove the private API works on this macOS build using a control folder and `mdfind` (10–35 s). `--json`. |
+| `spotsweep state` | SQLite schema, meta, table counts, recent scans/exports, FSEvents cursor. `--json`. |
+| `spotsweep retry` | Re-check `missing` paths; restore directories that exist again. |
+| `spotsweep logs` | Tail the rotating daemon log (`--lines N`, `--follow`). |
+| `spotsweep add-path ~/NewProjects` | Add a root (stored in config + SQLite) and scan it. `--no-scan` to defer. |
+| `spotsweep remove-path ~/NewProjects` | Remove a root without deleting project files or historical records. |
+| `spotsweep config` | Show effective TOML (`show`), `path`, `init`, `set KEY VALUE`, `edit`, `reload`. |
+| `spotsweep mark --all` | Record manual addition to Search Privacy (paths or `--export ID` also supported). |
+| `spotsweep service install` | Generate and load the user LaunchAgent (`--binary FILE` optional). |
+| `spotsweep service status` | Installed/loaded/running/PID (`--json`). |
+| `spotsweep service start` / `stop` / `restart` | launchctl lifecycle. |
+| `spotsweep service uninstall` | Remove the plist; data preserved. |
+| `spotsweep uninstall` | Remove the LaunchAgent and app-managed Spotlight exclusions (user entries are preserved). `--keep-exclusions` skips removal; `--purge-data --yes` deletes app data; `--remove-binary` deletes the executable. |
+| `spotsweep daemon` | Run the service in the foreground (used by LaunchAgent). |
 
 Useful examples:
 
 ```bash
-spotlight-dev status --json
-spotlight-dev list --status pending
-spotlight-dev list --rule node_modules --limit 20
-spotlight-dev report --output ~/Desktop/inventory.txt
-spotlight-dev export --group --output ~/Desktop/exclusions.txt
-spotlight-dev config set rules.scan_dot_directories true
-spotlight-dev config set rules.build "dist,build,out,storybook-static"
-spotlight-dev add-path ~/src
-spotlight-dev remove-path ~/Desktop
+spotsweep status --json
+spotsweep list --status pending
+spotsweep list --rule node_modules --limit 20
+spotsweep report --output ~/Desktop/inventory.txt
+spotsweep export --group --output ~/Desktop/exclusions.txt
+spotsweep config set rules.scan_dot_directories true
+spotsweep config set rules.build "dist,build,out,storybook-static"
+spotsweep add-path ~/src
+spotsweep remove-path ~/Desktop
 ```
 
 ### Configuration keys
@@ -506,9 +561,9 @@ are only active when `rules.scan_dot_directories = true`.
 Editing the file directly also works:
 
 ```bash
-spotlight-dev config path
-spotlight-dev config edit       # uses $EDITOR, else TextEdit
-spotlight-dev config reload     # asks a running daemon to reload (SIGHUP)
+spotsweep config path
+spotsweep config edit       # uses $EDITOR, else TextEdit
+spotsweep config reload     # asks a running daemon to reload (SIGHUP)
 ```
 
 A running daemon also notices config mtime changes at its next reconciliation.
@@ -517,20 +572,20 @@ A running daemon also notices config mtime changes at its next reconciliation.
 
 ## LaunchAgent
 
-- Label: `dev.spotlightdevexclusions.agent`
-- Plist: `~/Library/LaunchAgents/dev.spotlightdevexclusions.agent.plist`
+- Label: `com.spotsweep.agent`
+- Plist: `~/Library/LaunchAgents/com.spotsweep.agent.plist`
 - Runs as the logged-in user, never root
 - `RunAtLoad` + `KeepAlive` on unsuccessful exit, `ThrottleInterval` 10 s
 - `ProcessType=Background`, nice 10
-- Standard out/error: `~/Library/Logs/SpotlightDevExclusions/launchd.{out,err}.log`
+- Standard out/error: `~/Library/Logs/SpotSweep/launchd.{out,err}.log`
   (or `<data>/logs` when a custom data directory is used)
 - Rotating application log: `daemon.log.YYYY-MM-DD`, seven days retained
 
 ```bash
-spotlight-dev service status
-spotlight-dev service restart
-spotlight-dev logs --lines 100
-spotlight-dev logs --follow
+spotsweep service status
+spotsweep service restart
+spotsweep logs --lines 100
+spotsweep logs --follow
 ```
 
 The generated plist contains personal absolute paths and is **never committed**;
@@ -542,22 +597,26 @@ only `launchagent/*.plist.template` is in Git.
 
 | What | Location |
 |---|---|
-| Executable (default) | `~/.local/bin/spotlight-dev` |
-| Application data | `~/Library/Application Support/SpotlightDevExclusions/` |
-| Configuration | `…/SpotlightDevExclusions/config.toml` |
-| SQLite database | `…/SpotlightDevExclusions/state.sqlite3` (+ WAL/SHM) |
-| Exports | `…/SpotlightDevExclusions/exports/` |
-| Inventory reports | `…/SpotlightDevExclusions/inventory-*.txt` |
-| Daemon logs | `~/Library/Logs/SpotlightDevExclusions/` |
-| LaunchAgent | `~/Library/LaunchAgents/dev.spotlightdevexclusions.agent.plist` |
+| Executable (default) | `~/.local/bin/spotsweep` |
+| Application data | `~/Library/Application Support/SpotSweep/` |
+| Configuration | `…/SpotSweep/config.toml` |
+| SQLite database | `…/SpotSweep/spotsweep.db` (+ WAL/SHM) |
+| Exports | `…/SpotSweep/exports/` |
+| Inventory reports | `…/SpotSweep/inventory-*.txt` |
+| Daemon logs | `~/Library/Logs/SpotSweep/` |
+| LaunchAgent | `~/Library/LaunchAgents/com.spotsweep.agent.plist` |
 
 Overrides for development/tests:
 
 ```bash
-export SPOTLIGHT_DEV_EXCLUSIONS_DATA_DIR=/tmp/sdx-data
-export SPOTLIGHT_DEV_EXCLUSIONS_CONFIG=/tmp/sdx-data/config.toml
-export SPOTLIGHT_DEV_EXCLUSIONS_LAUNCH_AGENTS_DIR=/tmp/sdx-agents
+export SPOTSWEEP_DATA_DIR=/tmp/sdx-data
+export SPOTSWEEP_CONFIG=/tmp/sdx-data/config.toml
+export SPOTSWEEP_LAUNCH_AGENTS_DIR=/tmp/sdx-agents
 ```
+
+The legacy `SPOTLIGHT_DEV_EXCLUSIONS_*` and `SPOTLIGHT_DEV_LOG` variables are
+still accepted as fallbacks. Custom data directories are not auto-migrated;
+only the default `SpotSweep` location participates in migration.
 
 The source repository, compiled binary, installed binary, configuration and
 database are independent. Deleting one does not break the others (except that
@@ -587,9 +646,9 @@ Use `--keep-exclusions` to leave app-managed Spotlight exclusions in place.
 Or via the CLI:
 
 ```bash
-spotlight-dev uninstall
-spotlight-dev uninstall --keep-exclusions
-spotlight-dev uninstall --purge-data --yes
+spotsweep uninstall
+spotsweep uninstall --keep-exclusions
+spotsweep uninstall --purge-data --yes
 ```
 
 ---
@@ -617,9 +676,9 @@ Design choices that keep it light:
 **No directories found**
 
 ```bash
-spotlight-dev status
-spotlight-dev config show
-spotlight-dev scan --root "$HOME/work"
+spotsweep status
+spotsweep config show
+spotsweep scan --root "$HOME/work"
 ```
 
 Check that the roots exist. Missing roots are skipped, not treated as empty.
@@ -627,10 +686,10 @@ Check that the roots exist. Missing roots are skipped, not treated as empty.
 **Service is installed but not running**
 
 ```bash
-spotlight-dev service status
-spotlight-dev logs --lines 100
-cat "$HOME/Library/Logs/SpotlightDevExclusions/launchd.err.log"
-spotlight-dev service restart
+spotsweep service status
+spotsweep logs --lines 100
+cat "$HOME/Library/Logs/SpotSweep/launchd.err.log"
+spotsweep service restart
 ```
 
 **FSEvents stops delivering events**
@@ -638,15 +697,15 @@ spotlight-dev service restart
 The daemon handles dropped-history flags and reconciles. To force recovery:
 
 ```bash
-spotlight-dev service restart
-spotlight-dev rescan
+spotsweep service restart
+spotsweep rescan
 ```
 
 **A directory vanished but is still listed**
 
 ```bash
-spotlight-dev retry
-spotlight-dev rescan
+spotsweep retry
+spotsweep rescan
 ```
 
 `retry` restores rows that exist again; `rescan` marks genuinely absent
@@ -655,9 +714,9 @@ directories `missing`.
 **Automatic exclusion is gated or unsupported**
 
 ```bash
-spotlight-dev selftest
-spotlight-dev verify ~/work/app/node_modules
-spotlight-dev sync --dry-run
+spotsweep selftest
+spotsweep verify ~/work/app/node_modules
+spotsweep sync --dry-run
 ```
 
 The service only enables automatic exclusions after a passing selftest for the
@@ -669,7 +728,7 @@ private; see [`docs/PRIVATE_API.md`](docs/PRIVATE_API.md).
 
 Spotlight can drop requests while `mds` is busy. `sync` and `unexclude` retry
 with backoff and only report success when a re-read confirms the change. Run
-`spotlight-dev sync` again, then `spotlight-dev verify PATH`.
+`spotsweep sync` again, then `spotsweep verify PATH`.
 
 **Permissions errors**
 
@@ -683,17 +742,17 @@ required for the exclusion API. The tool avoids system directories by design.
 Reinstall the LaunchAgent so it points at the new location:
 
 ```bash
-spotlight-dev service install --binary /new/path/spotlight-dev
+spotsweep service install --binary /new/path/spotsweep
 ```
 
 **I want to start over**
 
 ```bash
-spotlight-dev service stop
-mv "$HOME/Library/Application Support/SpotlightDevExclusions" \
-   "$HOME/Library/Application Support/SpotlightDevExclusions.old"
-spotlight-dev config init
-spotlight-dev scan
+spotsweep service stop
+mv "$HOME/Library/Application Support/SpotSweep" \
+   "$HOME/Library/Application Support/SpotSweep.old"
+spotsweep config init
+spotsweep scan
 ```
 
 ---

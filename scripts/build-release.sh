@@ -5,9 +5,9 @@
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
 #
 # Output (dist/):
-#   spotlight-dev-macos-universal.zip
-#   spotlight-dev-aarch64-apple-darwin.tar.gz
-#   spotlight-dev-x86_64-apple-darwin.tar.gz
+#   spotsweep-macos-universal.zip
+#   spotsweep-aarch64-apple-darwin.tar.gz
+#   spotsweep-x86_64-apple-darwin.tar.gz
 #   SHA256SUMS
 set -euo pipefail
 
@@ -47,10 +47,10 @@ done
 rm -rf "$DIST"
 mkdir -p "$DIST/stage-universal"
 
-UNIVERSAL="$DIST/stage-universal/spotlight-dev"
+UNIVERSAL="$DIST/stage-universal/spotsweep"
 lipo -create \
-  "$REPO_DIR/target/aarch64-apple-darwin/release/spotlight-dev" \
-  "$REPO_DIR/target/x86_64-apple-darwin/release/spotlight-dev" \
+  "$REPO_DIR/target/aarch64-apple-darwin/release/spotsweep" \
+  "$REPO_DIR/target/x86_64-apple-darwin/release/spotsweep" \
   -output "$UNIVERSAL"
 chmod 0755 "$UNIVERSAL"
 
@@ -61,29 +61,29 @@ cp "$REPO_DIR/docs/PRIVATE_API.md" "$DIST/stage-universal/PRIVATE_API.md"
 codesign --force --sign - --timestamp=none "$UNIVERSAL"
 (
   cd "$DIST/stage-universal"
-  zip -X -q -r "$DIST/spotlight-dev-macos-universal.zip" \
-    spotlight-dev LICENSE README.md PRIVATE_API.md
+  zip -X -q -r "$DIST/spotsweep-macos-universal.zip" \
+    spotsweep LICENSE README.md PRIVATE_API.md
 )
 
 for target in "${TARGETS[@]}"; do
   stage="$DIST/stage-$target"
   mkdir -p "$stage"
-  cp "$REPO_DIR/target/$target/release/spotlight-dev" "$stage/spotlight-dev"
-  chmod 0755 "$stage/spotlight-dev"
-  codesign --force --sign - --timestamp=none "$stage/spotlight-dev"
+  cp "$REPO_DIR/target/$target/release/spotsweep" "$stage/spotsweep"
+  chmod 0755 "$stage/spotsweep"
+  codesign --force --sign - --timestamp=none "$stage/spotsweep"
   cp "$REPO_DIR/LICENSE" "$stage/LICENSE"
   cp "$REPO_DIR/README.md" "$stage/README.md"
   cp "$REPO_DIR/docs/PRIVATE_API.md" "$stage/PRIVATE_API.md"
-  tar -C "$stage" -czf "$DIST/spotlight-dev-$target.tar.gz" \
-    spotlight-dev LICENSE README.md PRIVATE_API.md
+  tar -C "$stage" -czf "$DIST/spotsweep-$target.tar.gz" \
+    spotsweep LICENSE README.md PRIVATE_API.md
 done
 
 rm -rf "$DIST"/stage-*
 (
   cd "$DIST"
-  shasum -a 256 spotlight-dev-macos-universal.zip \
-    spotlight-dev-aarch64-apple-darwin.tar.gz \
-    spotlight-dev-x86_64-apple-darwin.tar.gz > SHA256SUMS
+  shasum -a 256 spotsweep-macos-universal.zip \
+    spotsweep-aarch64-apple-darwin.tar.gz \
+    spotsweep-x86_64-apple-darwin.tar.gz > SHA256SUMS
 )
 
 echo

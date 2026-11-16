@@ -2,7 +2,7 @@
 
 This document records the investigation of
 [`rohiitgit/nohog`](https://github.com/rohiitgit/nohog), the exact private API
-it uses, and how `spotlight-dev` implements the same mechanism safely.
+it uses, and how SpotSweep implements the same mechanism safely.
 
 Investigated commit: **`e31bd296aa750d60265977966cc301546b614944`**
 (`e31bd29`, nohog `0.1.2`, inspected 2026-11-16).
@@ -165,7 +165,7 @@ exclusions.
 
 ---
 
-## 5. What `spotlight-dev` implements
+## 5. What SpotSweep implements
 
 ### Modules
 
@@ -230,7 +230,7 @@ exclusions.
 - No user exclusions existed on this machine; the selftest's baseline
   preservation check passed.
 
-### `spotlight-dev selftest` (live)
+### `spotsweep selftest` (live)
 
 ```
 Result: pass

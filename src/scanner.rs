@@ -247,7 +247,7 @@ pub fn full_scan(
     if let Some(path) = only_root {
         if selected.is_empty() {
             anyhow::bail!(
-                "{} is not an enabled scan root; add it with `spotlight-dev add-path`",
+                "{} is not an enabled scan root; add it with `spotsweep add-path`",
                 path.display()
             );
         }

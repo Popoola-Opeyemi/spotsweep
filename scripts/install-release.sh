@@ -1,35 +1,39 @@
 #!/usr/bin/env bash
-# Download and install the universal spotlight-dev release for the current user.
+# Download and install the universal spotsweep release for the current user.
 #
 # Examples:
-#   curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotlight-dev-exclusions/main/scripts/install-release.sh | bash
-#   VERSION=v0.2.0 bash scripts/install-release.sh
-#   SPOTLIGHT_DEV_NO_SERVICE=1 bash scripts/install-release.sh
+#   curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotsweep/main/scripts/install-release.sh | bash
+#   VERSION=v0.3.0 bash scripts/install-release.sh
+#   SPOTSWEEP_NO_SERVICE=1 bash scripts/install-release.sh
 set -euo pipefail
 
-REPOSITORY="${REPOSITORY:-Popoola-Opeyemi/spotlight-dev-exclusions}"
+REPOSITORY="${REPOSITORY:-Popoola-Opeyemi/spotsweep}"
 VERSION="${VERSION:-latest}"
 PREFIX="${PREFIX:-$HOME/.local}"
-DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
-NO_SERVICE="${SPOTLIGHT_DEV_NO_SERVICE:-0}"
-NO_SELFTEST="${SPOTLIGHT_DEV_NO_SELFTEST:-0}"
-NO_SCAN="${SPOTLIGHT_DEV_NO_SCAN:-0}"
+DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotSweep}"
+NO_SERVICE="${SPOTSWEEP_NO_SERVICE:-${SPOTLIGHT_DEV_NO_SERVICE:-0}}"
+NO_SELFTEST="${SPOTSWEEP_NO_SELFTEST:-${SPOTLIGHT_DEV_NO_SELFTEST:-0}}"
+NO_SCAN="${SPOTSWEEP_NO_SCAN:-${SPOTLIGHT_DEV_NO_SCAN:-0}}"
+LEGACY_LABEL="dev.spotlightdevexclusions.agent"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
 BIN_DIR="$PREFIX/bin"
-BIN="$BIN_DIR/spotlight-dev"
-ASSET="spotlight-dev-macos-universal.zip"
+BIN="$BIN_DIR/spotsweep"
+ASSET="spotsweep-macos-universal.zip"
 
 usage() {
   cat <<'EOF'
 Usage: install-release.sh
 
 Environment:
-  VERSION           latest (default) or a release tag such as v0.2.0
+  VERSION           latest (default) or a release tag such as v0.3.0
   PREFIX            install prefix (default: ~/.local)
   DATA_DIR          Application Support directory
-  REPOSITORY        GitHub owner/repo (default: Popoola-Opeyemi/spotlight-dev-exclusions)
-  SPOTLIGHT_DEV_NO_SERVICE=1   do not install/start the LaunchAgent
-  SPOTLIGHT_DEV_NO_SELFTEST=1  skip the Spotlight exclusion selftest
-  SPOTLIGHT_DEV_NO_SCAN=1      skip the initial discovery scan
+  REPOSITORY        GitHub owner/repo (default: Popoola-Opeyemi/spotsweep)
+  RELEASE_BASE_URL  override the asset base URL (mirrors/testing)
+  SPOTSWEEP_NO_SERVICE=1   do not install/start the LaunchAgent
+  SPOTSWEEP_NO_SELFTEST=1  skip the Spotlight exclusion selftest
+  SPOTSWEEP_NO_SCAN=1      skip the initial discovery scan
+  (legacy SPOTLIGHT_DEV_NO_* variables are also accepted)
 EOF
 }
 
@@ -51,13 +55,15 @@ case "$(uname -m)" in
   *) echo "Unsupported Mac architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-if [[ "$VERSION" == "latest" ]]; then
+if [[ -n "${RELEASE_BASE_URL:-}" ]]; then
+  RELEASE_BASE="$RELEASE_BASE_URL"
+elif [[ "$VERSION" == "latest" ]]; then
   RELEASE_BASE="https://github.com/$REPOSITORY/releases/latest/download"
 else
   RELEASE_BASE="https://github.com/$REPOSITORY/releases/download/$VERSION"
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/spotlight-dev-install.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/spotsweep-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading $ASSET from $RELEASE_BASE..."
@@ -81,29 +87,44 @@ fi
 
 mkdir -p "$TMP/extract"
 ditto -x -k "$TMP/$ASSET" "$TMP/extract"
-SOURCE_BIN="$(find "$TMP/extract" -type f -name spotlight-dev -perm -111 -print -quit)"
+SOURCE_BIN="$(find "$TMP/extract" -type f -name spotsweep -perm -111 -print -quit)"
 if [[ -z "$SOURCE_BIN" ]]; then
-  echo "The release archive did not contain an executable spotlight-dev." >&2
+  echo "The release archive did not contain an executable spotsweep." >&2
   exit 1
 fi
 
-mkdir -p "$BIN_DIR" "$DATA_DIR"
-TMP_BIN="$BIN_DIR/.spotlight-dev.tmp.$$"
+mkdir -p "$BIN_DIR"
+TMP_BIN="$BIN_DIR/.spotsweep.tmp.$$"
+if launchctl print "gui/$(id -u)/$LEGACY_LABEL" >/dev/null 2>&1; then
+  echo "Stopping legacy SpotlightDevExclusions LaunchAgent..."
+  launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" >/dev/null 2>&1 || true
+fi
 cp "$SOURCE_BIN" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
 mv -f "$TMP_BIN" "$BIN"
+OLD_BIN="$BIN_DIR/spotlight-dev"
+if [[ -f "$OLD_BIN" ]]; then
+  rm -f "$OLD_BIN"
+  echo "Removed legacy executable: $OLD_BIN"
+fi
 # Remove the quarantine bit from our downloaded binary if it was set.
 xattr -d com.apple.quarantine "$BIN" >/dev/null 2>&1 || true
 echo "Installed: $BIN ($(lipo -archs "$BIN" 2>/dev/null || echo 'architecture unknown'))"
 
-if [[ ! -f "$DATA_DIR/config.toml" ]]; then
-  "$BIN" --data-dir "$DATA_DIR" config init >/dev/null
-  echo "Created configuration: $DATA_DIR/config.toml"
-else
-  echo "Preserved existing configuration: $DATA_DIR/config.toml"
+if [[ -f "$LEGACY_PLIST" ]]; then
+  rm -f "$LEGACY_PLIST"
+  echo "Removed legacy LaunchAgent plist: $LEGACY_PLIST"
 fi
+
+# `status` triggers legacy data migration and creates the default config and
+# database only when no old data was migrated.
 "$BIN" --data-dir "$DATA_DIR" status >/dev/null
-echo "SQLite ready: $DATA_DIR/state.sqlite3"
+if [[ -f "$DATA_DIR/config.toml" ]]; then
+  echo "Configuration ready: $DATA_DIR/config.toml"
+else
+  echo "Warning: configuration was not created at $DATA_DIR/config.toml" >&2
+fi
+echo "SQLite ready: $DATA_DIR/spotsweep.db"
 
 if [[ "$NO_SELFTEST" != "1" ]]; then
   echo "Running the Spotlight exclusion selftest (10-35 seconds)..."
@@ -142,7 +163,7 @@ esac
 
 cat <<EOF
 
-spotlight-dev installed.
+SpotSweep installed.
   Binary: $BIN
   Data:   $DATA_DIR
   Status: $BIN --data-dir "$DATA_DIR" status
