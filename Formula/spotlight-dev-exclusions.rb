@@ -2,7 +2,7 @@ class SpotlightDevExclusions < Formula
   desc "Discover dev build directories and exclude them from Spotlight"
   homepage "https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions"
   url "https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions/releases/download/v0.2.0/spotlight-dev-macos-universal.zip"
-  sha256 "c180aae536d96c01526322219af6c5cd636f0e0af2630f4ee56a00005254126e"
+  sha256 "7ffad54818fbac53f8eeeb7affecd3211efac472523df04114e9166667e28c6b"
   license "MIT"
   version "0.2.0"
 

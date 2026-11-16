@@ -514,6 +514,8 @@ mod tests {
         assert_eq!(config.rules.build, vec!["dist", "build"]);
         config.set_key("daemon.event_latency_ms", "500").unwrap();
         assert_eq!(config.daemon.event_latency_ms, 500);
+        config.set_key("exclusions.auto", "false").unwrap();
+        assert!(!config.exclusions.auto);
         assert!(config.set_key("nope.nope", "1").is_err());
         assert!(config.set_key("scan.max_depth", "999").is_err());
     }

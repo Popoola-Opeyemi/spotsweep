@@ -15,7 +15,7 @@
 use crate::config::Config;
 use crate::database::{Db, DirectoryFilter};
 use crate::metadata::MetadataBackend;
-use crate::model::{ExclusionSource, ExclusionState, Status};
+use crate::model::{ExclusionSource, ExclusionState};
 use crate::paths::{home_dir, is_system_path, normalize_path, path_within};
 use crate::util::now_ms;
 use anyhow::{Context, Result, bail};
@@ -232,13 +232,10 @@ fn desired_paths(db: &Db, config: &Config) -> Result<(BTreeSet<String>, BTreeSet
     let mut removable = BTreeSet::new();
 
     let opt_outs: BTreeSet<String> = db.exclusion_opt_outs()?.into_iter().collect();
-    let rows = db.list_directories(&DirectoryFilter {
-        statuses: Status::ALL
-            .into_iter()
-            .filter(|status| *status != Status::Missing)
-            .collect(),
-        ..Default::default()
-    })?;
+    // Include `missing` rows too: if the path exists again (for example after a
+    // volume remount) it should be re-excluded before the next scanner pass
+    // revives the row.  Paths that really are absent are skipped below.
+    let rows = db.list_directories(&DirectoryFilter::default())?;
 
     for row in rows {
         let path = Path::new(&row.path);
@@ -1283,7 +1280,7 @@ impl ExclusionBackend for FakeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RuleKind;
+    use crate::model::{RuleKind, Status};
     use tempfile::TempDir;
 
     fn db_with_root(root: &Path) -> Db {

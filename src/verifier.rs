@@ -1,11 +1,14 @@
-//! Verification of Spotlight Search Privacy exclusions.
+//! Manual fallback verification for Spotlight Search Privacy exclusions.
 //!
-//! Research result (macOS 27, and unchanged in current releases): `mdutil -P`
-//! dumps the volume's `VolumeConfiguration.plist`.  It does not expose the
-//! Search Privacy list, and its output is not a stable public interface.
-//! Running it requires root.  Consequently this application never treats
-//! `mdutil` output as proof.  The only reliable verification available to a
-//! user-level tool is explicit visual confirmation in System Settings.
+//! Automatic verification lives in [`crate::exclusion::verify_path`], which
+//! re-reads Spotlight's actual exclusion list through Metadata.framework and
+//! can cross-check `mdfind`.
+//!
+//! This module handles the manual workflow and the diagnostic `mdutil` probe.
+//! Research result: `mdutil -P` dumps the volume's
+//! `VolumeConfiguration.plist`.  It does not expose the Search Privacy list,
+//! and its output is not a stable public interface.  Running it requires root.
+//! Consequently this application never treats `mdutil` output as proof.
 
 use crate::config::Config;
 use crate::database::{Db, DirectoryFilter, MarkTarget};
@@ -225,7 +228,10 @@ Manual verification:
   2. Confirm each exported folder is present.
   3. Record that confirmation:
        spotlight-dev verify --confirm
-No private APIs, Spotlight stores, or mds interfaces are used."
+
+Automatic verification is also available: `spotlight-dev verify PATH` reads
+Spotlight's actual exclusion list. This manual path never edits Spotlight
+stores or mds state."
 }
 
 pub fn require_manual_or_confirm(confirm: bool) -> Result<()> {

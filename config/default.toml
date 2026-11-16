@@ -6,7 +6,9 @@
 # by an upgrade.
 #
 # Paths may start with "~".  Missing roots are skipped safely.
-# The application never writes to Spotlight's configuration or private stores.
+# Automatic exclusion uses the private Metadata.framework exclusion calls and
+# verifies every change against Spotlight's reported list.  Set
+# [exclusions] auto = false to use only the manual export workflow.
 
 [scan]
 # Directories that contain projects.  Remove or add entries with:

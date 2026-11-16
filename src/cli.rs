@@ -747,12 +747,13 @@ fn cmd_list(
         .map(|row| {
             vec![
                 row.status.clone(),
+                row.exclusion_state.clone().unwrap_or_else(|| "-".into()),
                 format!("{}:{}", row.rule_kind, row.rule),
                 row.path.clone(),
             ]
         })
         .collect();
-    print_table(&["STATUS", "RULE", "PATH"], &table);
+    print_table(&["STATUS", "EXCLUSION", "RULE", "PATH"], &table);
     println!(
         "\n{} director{}.",
         rows.len(),
@@ -915,6 +916,7 @@ fn cmd_export(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_verify(
     _paths: &AppPaths,
     config: &Config,
