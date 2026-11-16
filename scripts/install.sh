@@ -13,6 +13,7 @@ PREFIX="${PREFIX:-$HOME/.local}"
 DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
 INSTALL_SERVICE=1
 RUN_SCAN=1
+RUN_SELFTEST=1
 DETECT_ROOTS=1
 FORCE_BUILD=0
 LABEL="dev.spotlightdevexclusions.agent"
@@ -27,6 +28,7 @@ Options:
                      (default: ~/Library/Application Support/SpotlightDevExclusions)
   --no-service       Do not install/start the LaunchAgent
   --no-scan          Do not run the initial discovery scan/report
+  --no-selftest      Do not run the Spotlight exclusion selftest
   --no-detect        Do not add existing common development folders
   --build            Force a release rebuild
   -h, --help         Show this help
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --data-dir=*) DATA_DIR="$(expand_tilde "${1#*=}")"; shift ;;
     --no-service) INSTALL_SERVICE=0; shift ;;
     --no-scan) RUN_SCAN=0; shift ;;
+    --no-selftest) RUN_SELFTEST=0; shift ;;
     --no-detect) DETECT_ROOTS=0; shift ;;
     --build) FORCE_BUILD=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -145,6 +148,22 @@ fi
 "$BIN" --data-dir "$DATA_DIR" status >/dev/null
 echo "SQLite ready: $DATA_DIR/state.sqlite3"
 
+SELFTEST_OK=0
+if [[ "$RUN_SELFTEST" -eq 1 ]]; then
+  echo "Checking that Spotlight honors exclusions on this macOS (10-35 seconds)..."
+  if "$BIN" --data-dir "$DATA_DIR" selftest; then
+    SELFTEST_OK=1
+  else
+    SELFTEST_STATUS=$?
+    if [[ "$SELFTEST_STATUS" -eq 2 ]]; then
+      echo "Selftest was inconclusive (Spotlight may be busy)." >&2
+    else
+      echo "Selftest failed or the private API is unavailable." >&2
+    fi
+    echo "Automatic exclusion stays gated; the manual export workflow remains available." >&2
+  fi
+fi
+
 if [[ "$DETECT_ROOTS" -eq 1 ]]; then
   ADDED=0
   for candidate in \
@@ -205,17 +224,20 @@ fi
 
 cat <<EOF
 
-Next step (manual, required):
-  1. Generate the exclusion list:
-       $BIN export
-  2. Open System Settings -> Spotlight -> Search Privacy.
-  3. Add each exported folder manually.
-  4. Record that you added them:
-       $BIN mark --all
-  5. After visually confirming the list, record verification:
-       $BIN verify --confirm
+Automatic exclusion: $([[ "$SELFTEST_OK" -eq 1 ]] && echo "enabled (selftest passed)" || echo "gated (run: $BIN selftest)")
+Check and reconcile at any time:
+  $BIN verify ~/path/to/node_modules
+  $BIN sync --dry-run
+  $BIN sync
 
-This application never modifies Spotlight configuration or private stores.
+If automatic exclusion is unavailable or not confirmed, use the fallback:
+  1. $BIN export
+  2. System Settings -> Spotlight -> Search Privacy -> add the exported folders
+  3. $BIN mark --all
+  4. $BIN verify --confirm
+
+The only Spotlight write is through the private _MDSetExclusion call, verified
+by re-reading Spotlight's list. No plist or private database is edited.
 LaunchAgent installed: $([[ "$SERVICE_OK" -eq 1 ]] && echo yes || echo no)
 Data directory: $DATA_DIR
 Configuration: $DATA_DIR/config.toml

@@ -108,7 +108,10 @@ pub fn validate_target(path: &Path) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("exclusion target does not exist: {}", normalized.display()))?;
     if !canonical.is_dir() {
-        bail!("exclusion target is not a directory: {}", canonical.display());
+        bail!(
+            "exclusion target is not a directory: {}",
+            canonical.display()
+        );
     }
     if let Ok(home) = home_dir() {
         if canonical == home {
@@ -145,9 +148,12 @@ pub fn apply_exclusions(
 
     for delay in retry_delays {
         let present: BTreeSet<&String> = after.iter().collect();
-        let pending_adds: Vec<&String> = add.iter().filter(|path| !present.contains(path)).collect();
-        let pending_removes: Vec<&String> =
-            remove.iter().filter(|path| present.contains(path)).collect();
+        let pending_adds: Vec<&String> =
+            add.iter().filter(|path| !present.contains(path)).collect();
+        let pending_removes: Vec<&String> = remove
+            .iter()
+            .filter(|path| present.contains(path))
+            .collect();
         if pending_adds.is_empty() && pending_removes.is_empty() {
             break;
         }
@@ -353,13 +359,7 @@ pub fn sync(
         return Ok(report);
     }
 
-    let outcome = apply_exclusions(
-        backend,
-        &add,
-        &remove,
-        &current,
-        DEFAULT_RETRY_DELAYS_MS,
-    )?;
+    let outcome = apply_exclusions(backend, &add, &remove, &current, DEFAULT_RETRY_DELAYS_MS)?;
     let after_set: BTreeSet<String> = outcome.after.iter().cloned().collect();
     report.failed_adds = outcome.failed_adds.clone();
     report.failed_removes = outcome.failed_removes.clone();
@@ -368,7 +368,10 @@ pub fn sync(
     for path in desired.iter() {
         let was_added = add.iter().any(|candidate| candidate == path);
         let existing = db.exclusion_get(path)?;
-        let managed = existing.as_ref().map(|record| record.managed).unwrap_or(false)
+        let managed = existing
+            .as_ref()
+            .map(|record| record.managed)
+            .unwrap_or(false)
             || (was_added && after_set.contains(path));
         let source = existing
             .as_ref()
@@ -449,11 +452,7 @@ pub struct MutationReport {
     pub api_failures: Vec<ApiFailure>,
 }
 
-pub fn exclude_path(
-    db: &mut Db,
-    path: &Path,
-    source: ExclusionSource,
-) -> Result<MutationReport> {
+pub fn exclude_path(db: &mut Db, path: &Path, source: ExclusionSource) -> Result<MutationReport> {
     let target = validate_target(path)?;
     let target_string = trim_path(&target);
     db.clear_exclusion_opt_out(&target_string)?;
@@ -462,7 +461,10 @@ pub fn exclude_path(
     let existing = db.exclusion_get(&target_string)?;
 
     if current.iter().any(|entry| entry == &target_string) {
-        let managed = existing.as_ref().map(|record| record.managed).unwrap_or(false);
+        let managed = existing
+            .as_ref()
+            .map(|record| record.managed)
+            .unwrap_or(false);
         let source = existing
             .as_ref()
             .map(|record| record.parsed_source())
@@ -551,7 +553,10 @@ pub fn unexclude_path(db: &mut Db, path: &Path) -> Result<MutationReport> {
     let backend = backend_from_db(db)?;
     let current = read_list(&backend)?;
     let existing = db.exclusion_get(&target_string)?;
-    let managed = existing.as_ref().map(|record| record.managed).unwrap_or(true);
+    let managed = existing
+        .as_ref()
+        .map(|record| record.managed)
+        .unwrap_or(true);
 
     if !current.iter().any(|entry| entry == &target_string) {
         db.opt_out_exclusion(&target_string, "user requested unexclude")?;
@@ -651,13 +656,7 @@ pub fn remove_all_managed(
         return Ok(report);
     }
 
-    let outcome = apply_exclusions(
-        backend,
-        &[],
-        &attempted,
-        &current,
-        DEFAULT_RETRY_DELAYS_MS,
-    )?;
+    let outcome = apply_exclusions(backend, &[], &attempted, &current, DEFAULT_RETRY_DELAYS_MS)?;
     report.api_failures = outcome.api_failures;
     for path in &attempted {
         if outcome.after.iter().any(|entry| entry == path) {
@@ -830,10 +829,7 @@ pub struct SelftestReport {
     pub failed: usize,
 }
 
-pub fn selftest(
-    backend: &dyn ExclusionBackend,
-    parent: &Path,
-) -> Result<SelftestReport> {
+pub fn selftest(backend: &dyn ExclusionBackend, parent: &Path) -> Result<SelftestReport> {
     let mut checks = Vec::new();
     let build = os_build();
     let version = macos_version();
@@ -886,7 +882,9 @@ pub fn selftest(
         checks.push(check(
             "repeated exclusion is idempotent",
             Some(repeated_ok),
-            &format!("second _MDSetExclusion returned {repeated}; list contains the path: {repeated_ok}"),
+            &format!(
+                "second _MDSetExclusion returned {repeated}; list contains the path: {repeated_ok}"
+            ),
         ));
 
         std::fs::write(control.join("probe.txt"), format!("{token}\n"))
@@ -899,7 +897,10 @@ pub fn selftest(
             control_hits = search_token(&token, &base);
             if control_hits
                 .as_ref()
-                .map(|hits| hits.iter().any(|path| path_within(Path::new(path), &control)))
+                .map(|hits| {
+                    hits.iter()
+                        .any(|path| path_within(Path::new(path), &control))
+                })
                 .unwrap_or(false)
             {
                 break;
@@ -908,7 +909,10 @@ pub fn selftest(
         }
         let control_searchable = control_hits
             .as_ref()
-            .map(|hits| hits.iter().any(|path| path_within(Path::new(path), &control)))
+            .map(|hits| {
+                hits.iter()
+                    .any(|path| path_within(Path::new(path), &control))
+            })
             .unwrap_or(false);
         checks.push(check(
             "normal source files remain searchable",
@@ -982,7 +986,9 @@ pub fn selftest(
         checks.push(check(
             "repeated unexclude is idempotent",
             Some(second_removal_ok),
-            &format!("second removal returned {repeated_remove}; list is clean: {second_removal_ok}"),
+            &format!(
+                "second removal returned {repeated_remove}; list is clean: {second_removal_ok}"
+            ),
         ));
 
         let missing_baseline: Vec<String> = baseline
@@ -1104,7 +1110,10 @@ fn report(
     backend: &str,
     checks: &[SelftestCheck],
 ) -> SelftestReport {
-    let passed = checks.iter().filter(|check| check.passed == Some(true)).count();
+    let passed = checks
+        .iter()
+        .filter(|check| check.passed == Some(true))
+        .count();
     let failed = checks
         .iter()
         .filter(|check| check.passed == Some(false))
@@ -1152,7 +1161,10 @@ pub fn os_build() -> String {
     if second != 0 {
         return "unknown".into();
     }
-    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
     String::from_utf8_lossy(&buffer[..end]).into_owned()
 }
 
@@ -1378,14 +1390,8 @@ mod tests {
         // unexclude_path constructs its own Metadata backend, so exercise the
         // same bookkeeping directly with the fake.
         let current = backend.snapshot();
-        let outcome = apply_exclusions(
-            &backend,
-            &[],
-            std::slice::from_ref(&path),
-            &current,
-            &[0],
-        )
-        .unwrap();
+        let outcome =
+            apply_exclusions(&backend, &[], std::slice::from_ref(&path), &current, &[0]).unwrap();
         assert!(outcome.after.is_empty());
         db.delete_exclusion(&path).unwrap();
         db.opt_out_exclusion(&path, "test").unwrap();
@@ -1466,7 +1472,10 @@ mod tests {
         let path = temp.path().join("dir");
         std::fs::create_dir_all(&path).unwrap();
         let with_slash = format!("{}/", path.display());
-        assert_eq!(normalize_reported_path(&with_slash), resolve_exclusion_path(&path).unwrap());
+        assert_eq!(
+            normalize_reported_path(&with_slash),
+            resolve_exclusion_path(&path).unwrap()
+        );
     }
 
     #[test]

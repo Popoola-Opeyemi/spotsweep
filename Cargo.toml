@@ -1,11 +1,13 @@
 [package]
 name = "spotlight-dev-exclusions"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Discover development build directories and prepare a manual Spotlight Search Privacy exclusion list"
+description = "Discover development build directories and automatically exclude them from Spotlight"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions"
+homepage = "https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions"
 
 [[bin]]
 name = "spotlight-dev"

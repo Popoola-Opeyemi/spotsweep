@@ -452,9 +452,7 @@ impl Config {
             "exclusions.run_selftest_on_os_change" => {
                 self.exclusions.run_selftest_on_os_change = bool_value()?
             }
-            "exclusions.selftest_required" => {
-                self.exclusions.selftest_required = bool_value()?
-            }
+            "exclusions.selftest_required" => self.exclusions.selftest_required = bool_value()?,
             "exclusions.remove_stale" => self.exclusions.remove_stale = bool_value()?,
             other => return Err(ConfigError::UnknownKey(other.to_string()).into()),
         }

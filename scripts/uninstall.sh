@@ -9,6 +9,7 @@ PREFIX="${PREFIX:-$HOME/.local}"
 DATA_DIR="${DATA_DIR:-$HOME/Library/Application Support/SpotlightDevExclusions}"
 PURGE=0
 ASSUME_YES=0
+KEEP_EXCLUSIONS=0
 LABEL="dev.spotlightdevexclusions.agent"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOGS_DIR="$HOME/Library/Logs/SpotlightDevExclusions"
@@ -22,6 +23,7 @@ Options:
   --data-dir DIR   Application Support directory
   --keep-data      Preserve configuration, database and exports (default)
   --purge-data     Also delete configuration, database and exports
+  --keep-exclusions  Keep Spotlight exclusions this application added
   --yes            Do not prompt when --purge-data is used
   -h, --help       Show this help
 EOF
@@ -43,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --data-dir=*) DATA_DIR="$(expand_tilde "${1#*=}")"; shift ;;
     --keep-data) PURGE=0; shift ;;
     --purge-data) PURGE=1; shift ;;
+    --keep-exclusions) KEEP_EXCLUSIONS=1; shift ;;
     --yes) ASSUME_YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
@@ -63,6 +66,13 @@ if [[ -x "$BIN" && -f "$PLIST" ]]; then
 else
   launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
   rm -f "$PLIST"
+fi
+
+if [[ "$KEEP_EXCLUSIONS" -eq 0 && -x "$BIN" && -f "$DATA_DIR/state.sqlite3" ]]; then
+  echo "Removing Spotlight exclusions added by this application..."
+  "$BIN" --data-dir "$DATA_DIR" uninstall --keep-data || true
+else
+  echo "Spotlight exclusions were kept."
 fi
 
 if [[ -x "$BIN" ]]; then
@@ -117,6 +127,6 @@ cat <<EOF
 
 Uninstallation complete.
   Source repository: $REPO_DIR (untouched)
-  Spotlight Search Privacy: untouched
+  Spotlight Search Privacy: app-managed entries $([[ "$KEEP_EXCLUSIONS" -eq 1 ]] && echo kept || echo removed); user entries preserved
   Project files: untouched
 EOF

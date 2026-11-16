@@ -95,9 +95,7 @@ impl ExclusionState {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|state| state.as_str() == value)
+        Self::ALL.into_iter().find(|state| state.as_str() == value)
     }
 }
 

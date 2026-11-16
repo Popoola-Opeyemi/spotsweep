@@ -186,10 +186,68 @@ re-read of Spotlight's exclusion list, and the selftest adds an independent
 
 ## Requirements
 
-- macOS (tested on macOS 27 / Apple Silicon)
-- Rust toolchain with Cargo (for building)
+- macOS (tested on macOS 27.2.1 build 26B131, Apple Silicon)
+- Universal release supports both Apple Silicon and Intel
+- Rust toolchain with Cargo (only when building)
 - Xcode Command Line Tools (`xcode-select --install`) for the linker
-- No administrative privileges; the LaunchAgent runs as your user
+- No administrative privileges, root, or Full Disk Access for exclusion
+  operations; the LaunchAgent runs as your user
+
+---
+
+## Install from a release
+
+### Homebrew
+
+```bash
+brew tap popoola-opeyemi/tap https://github.com/Popoola-Opeyemi/spotlight-dev-exclusions
+brew install spotlight-dev-exclusions
+brew services start spotlight-dev-exclusions
+spotlight-dev selftest
+```
+
+The formula installs the universal binary. `brew services` runs
+`spotlight-dev daemon` as your LaunchAgent; `brew services stop` stops it.
+The first service start runs the selftest automatically when the macOS build
+changes.
+
+### curl (universal binary)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Popoola-Opeyemi/spotlight-dev-exclusions/main/scripts/install-release.sh | bash
+```
+
+The installer downloads the latest universal zip, verifies its published
+`SHA256SUMS` when available, installs to `~/.local/bin/spotlight-dev`, runs the
+self-test, performs an initial scan, and installs/starts the LaunchAgent.
+Environment overrides: `PREFIX`, `VERSION`, `DATA_DIR`, and
+`SPOTLIGHT_DEV_NO_SERVICE=1`.
+
+If you download the zip in a browser, clear the quarantine flag first:
+
+```bash
+xattr -d com.apple.quarantine ~/Downloads/spotlight-dev-macos-universal.zip
+```
+
+### Build a universal release locally
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+./scripts/build-release.sh
+```
+
+Artifacts are written to `dist/`:
+
+```
+spotlight-dev-macos-universal.zip
+spotlight-dev-aarch64-apple-darwin.tar.gz
+spotlight-dev-x86_64-apple-darwin.tar.gz
+SHA256SUMS
+```
+
+The universal binary is ad-hoc signed, not notarized. Each architecture is
+also available as a separate tarball. `scripts/build-release.sh` uses `lipo`
+and prints the architecture list and checksums.
 
 ---
 
@@ -210,9 +268,9 @@ Run the test suite:
 cargo test
 ```
 
-Tests use temporary directory trees and temporary SQLite databases. The daemon
-integration test starts a real child process, creates `node_modules`, verifies
-FSEvents discovery, sends `SIGTERM`, and checks persistence.
+Tests use temporary directory trees and temporary SQLite databases. The live
+private API is exercised by `spotlight-dev selftest`; unit/integration tests use
+an in-memory fake backend so they never alter your real Search Privacy list.
 
 ---
 
@@ -238,11 +296,15 @@ What it does:
 4. Creates `~/Library/Application Support/SpotlightDevExclusions/`.
 5. Installs the default TOML config **only if missing**.
 6. Initialises/migrates SQLite.
-7. Adds existing common development folders (`~/development`, `~/work`, …)
+7. Runs the Spotlight exclusion selftest (10–35 seconds) when automatic
+   exclusion is enabled and no pass is recorded for this macOS build.
+8. Adds existing common development folders (`~/development`, `~/work`, …)
    that are not already configured.
-8. Runs the initial discovery scan and writes an inventory report.
-9. Installs and starts the user LaunchAgent.
-10. Prints status, pending entries, and the manual Spotlight instructions.
+9. Runs the initial discovery scan (automatically excluding new matches when
+   the selftest passed) and writes an inventory report.
+10. Installs and starts the user LaunchAgent.
+11. Prints status and, if automatic exclusion is gated, the manual fallback
+    instructions.
 
 It never overwrites an existing config or database during an upgrade.
 
@@ -304,7 +366,42 @@ checkout without pulling:
 
 ---
 
-## Manual Spotlight workflow
+## Automatic workflow
+
+Run the self-test once for the current macOS build, then scan:
+
+```bash
+spotlight-dev selftest
+spotlight-dev scan
+spotlight-dev status
+```
+
+The daemon does the same automatically at startup (after an OS update it
+re-runs the selftest). Newly discovered matches are excluded within a few
+seconds of an FSEvents notification, and every request is verified by
+re-reading Spotlight's list. Use `sync` to reconcile immediately:
+
+```bash
+spotlight-dev sync              # add missing, prune stale, preserve user entries
+spotlight-dev sync --dry-run    # preview only
+```
+
+Explicit path operations:
+
+```bash
+spotlight-dev exclude ~/work/app/node_modules
+spotlight-dev verify ~/work/app/node_modules
+spotlight-dev unexclude ~/work/app/node_modules
+```
+
+`unexclude` records an opt-out, so the next `sync` does not immediately add the
+path back. Running `exclude` again clears that opt-out.
+
+### Manual fallback
+
+If the API is unavailable, the selftest fails, or a change is not confirmed,
+the directory remains `pending_manual_exclusion`. The export workflow is
+unchanged:
 
 1. Discover directories:
 
@@ -346,9 +443,10 @@ checkout without pulling:
    spotlight-dev verify --confirm
    ```
 
-`verify` without `--confirm` always reports that automatic verification is
-unavailable; it never guesses. `verify --strict` exits with status 3 if
-confirmation has not been recorded.
+`verify --confirm` remains available for the manual path. `verify` with a path
+reads Spotlight's actual exclusion list and reports `excluded`,
+`not_excluded`, or `inconsistent`; `--strict` exits 3 unless the path is
+confirmed excluded.
 
 ---
 
@@ -373,7 +471,12 @@ Global flags (before or after the subcommand):
 | `spotlight-dev pending` | Paths awaiting manual exclusion (`--limit`, `--json`). |
 | `spotlight-dev report` | Inventory grouped by project (`--output FILE`). |
 | `spotlight-dev export` | Generate a plain-text list. Flags: `--all`, `--pending`, `--type RULE`, `--group`, `--flat`, `--no-header`, `--output FILE`, `--open`. |
-| `spotlight-dev verify` | Explain verification availability. `--mdutil` probes `mdutil -P` read-only (root only, never proof); `--confirm` records visual confirmation; `--path PATH` restricts it; `--strict` exit 3 if unverified. |
+| `spotlight-dev exclude PATH` | Add a directory to Spotlight's Search Privacy list; verifies by re-reading the list. `--dry-run` previews. |
+| `spotlight-dev unexclude PATH` | Remove a directory and record an opt-out so `sync` will not re-add it. |
+| `spotlight-dev verify PATH` | Read Spotlight's actual exclusion list and an `mdfind` count. Outcomes: `excluded`, `not_excluded`, `inconsistent`. `--strict` exits 3 unless excluded. |
+| `spotlight-dev verify --confirm` | Record visual confirmation for the manual workflow. `--mdutil` probes `mdutil -P` read-only (root only, never proof). |
+| `spotlight-dev sync` | Reconcile all discovered directories with Spotlight's list. `--dry-run`, `--json`. Never removes user-managed entries. |
+| `spotlight-dev selftest` | Prove the private API works on this macOS build using a control folder and `mdfind` (10–35 s). `--json`. |
 | `spotlight-dev state` | SQLite schema, meta, table counts, recent scans/exports, FSEvents cursor. `--json`. |
 | `spotlight-dev retry` | Re-check `missing` paths; restore directories that exist again. |
 | `spotlight-dev logs` | Tail the rotating daemon log (`--lines N`, `--follow`). |
@@ -385,7 +488,7 @@ Global flags (before or after the subcommand):
 | `spotlight-dev service status` | Installed/loaded/running/PID (`--json`). |
 | `spotlight-dev service start` / `stop` / `restart` | launchctl lifecycle. |
 | `spotlight-dev service uninstall` | Remove the plist; data preserved. |
-| `spotlight-dev uninstall` | Remove the LaunchAgent; `--purge-data --yes` deletes app data; `--remove-binary` deletes the executable. |
+| `spotlight-dev uninstall` | Remove the LaunchAgent and app-managed Spotlight exclusions (user entries are preserved). `--keep-exclusions` skips removal; `--purge-data --yes` deletes app data; `--remove-binary` deletes the executable. |
 | `spotlight-dev daemon` | Run the service in the foreground (used by LaunchAgent). |
 
 Useful examples:
@@ -427,6 +530,10 @@ daemon.event_debounce_ms             0..10000
 daemon.max_batch_events              100..100000
 daemon.log_level                     trace|debug|info|warn|error
 verify.mdutil_volume                 volume path
+exclusions.auto                      true|false
+exclusions.run_selftest_on_os_change true|false
+exclusions.selftest_required         true|false
+exclusions.remove_stale              true|false
 ```
 
 Exact names are case-sensitive and only match directory names. Globs match the
@@ -506,16 +613,19 @@ deleting the installed binary obviously removes the command).
 The uninstaller:
 
 - stops and unloads the LaunchAgent
+- removes the Spotlight exclusions this application added (never user-added ones)
 - removes the installed executable
 - removes the plist
 - optionally preserves or removes the SQLite database, config, exports and logs
 - never deletes the source repository
-- never touches Spotlight Search Privacy settings
+
+Use `--keep-exclusions` to leave app-managed Spotlight exclusions in place.
 
 Or via the CLI:
 
 ```bash
 spotlight-dev uninstall
+spotlight-dev uninstall --keep-exclusions
 spotlight-dev uninstall --purge-data --yes
 ```
 
@@ -579,12 +689,31 @@ spotlight-dev rescan
 `retry` restores rows that exist again; `rescan` marks genuinely absent
 directories `missing`.
 
+**Automatic exclusion is gated or unsupported**
+
+```bash
+spotlight-dev selftest
+spotlight-dev verify ~/work/app/node_modules
+spotlight-dev sync --dry-run
+```
+
+The service only enables automatic exclusions after a passing selftest for the
+current macOS build (`kern.osversion`). After an OS update it re-runs the test.
+A failure leaves directories pending for the export workflow. The API is
+private; see [`docs/PRIVATE_API.md`](docs/PRIVATE_API.md).
+
+**A directory is still in Search Privacy after I removed it**
+
+Spotlight can drop requests while `mds` is busy. `sync` and `unexclude` retry
+with backoff and only report success when a re-read confirms the change. Run
+`spotlight-dev sync` again, then `spotlight-dev verify PATH`.
+
 **Permissions errors**
 
 The scanner skips unreadable subtrees and does not infer `missing` from an
 incomplete walk. Check Console/logs. Full Disk Access is only needed if your scan
-roots contain protected locations such as some parts of `~/Library`; the tool
-avoids system directories by design.
+roots contain protected locations such as some parts of `~/Library`; it is not
+required for the exclusion API. The tool avoids system directories by design.
 
 **I moved the installed binary**
 
@@ -621,10 +750,18 @@ the executable works when copied elsewhere. The SQLite schema is embedded from
 
 Safety boundaries are enforced in code and documented in the modules:
 
-- no writes to Spotlight config, `mds`, XPC, or private APIs
+- no direct writes to `VolumeConfiguration.plist`, Spotlight's private
+  databases, `mds`, or undocumented XPC services
+- the only private calls are the dynamically resolved
+  `_MDCopyExclusionList` / `_MDSetExclusion` pair documented in
+  `docs/PRIVATE_API.md`
+- every claimed exclusion is verified by re-reading Spotlight's list, plus a
+  `mdfind` control-folder check in the selftest
+- user-managed Search Privacy entries are never removed by `sync`
 - no modification of project files
 - symlinks outside a root are never followed
-- uninstall never deletes the repository or Spotlight settings
+- uninstall removes only entries this application added, and never deletes the
+  repository
 
 ## License
 

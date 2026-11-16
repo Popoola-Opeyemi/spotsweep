@@ -913,11 +913,11 @@ impl Db {
     }
 
     pub fn managed_exclusion_count(&self) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COUNT(*) FROM exclusions WHERE managed = 1", [], |row| {
-                row.get(0)
-            })?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM exclusions WHERE managed = 1",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Record the result of an exclusion operation.  Existing `managed = 1`
@@ -1108,9 +1108,7 @@ fn row_to_directory(row: &rusqlite::Row<'_>) -> rusqlite::Result<DirectoryRecord
         retry_count: row.get(16)?,
         last_error: row.get(17)?,
         exclusion_state: row.get(18)?,
-        exclusion_managed: row
-            .get::<_, Option<i64>>(19)?
-            .map(|value| value != 0),
+        exclusion_managed: row.get::<_, Option<i64>>(19)?.map(|value| value != 0),
         exclusion_verified_at: row.get(20)?,
         exclusion_error: row.get(21)?,
     })

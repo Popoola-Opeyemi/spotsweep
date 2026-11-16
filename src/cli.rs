@@ -285,13 +285,7 @@ pub fn run() -> Result<()> {
             remove_binary,
             keep_exclusions,
             yes,
-        } => cmd_uninstall(
-            &paths,
-            purge_data,
-            remove_binary,
-            keep_exclusions,
-            yes,
-        ),
+        } => cmd_uninstall(&paths, purge_data, remove_binary, keep_exclusions, yes),
         Command::Daemon => crate::daemon::run(paths),
         Command::Logs { lines, follow } => cmd_logs(&paths, lines, follow),
         other => {
@@ -340,9 +334,7 @@ pub fn run() -> Result<()> {
                     verify_paths,
                     strict,
                 ),
-                Command::Exclude { path, dry_run } => {
-                    cmd_exclude(&mut db, &path, dry_run)
-                }
+                Command::Exclude { path, dry_run } => cmd_exclude(&mut db, &path, dry_run),
                 Command::Unexclude { path } => cmd_unexclude(&mut db, &path),
                 Command::Sync { dry_run, json } => cmd_sync(&config, &mut db, dry_run, json),
                 Command::Selftest { json } => cmd_selftest(&paths, &mut db, json),
@@ -507,7 +499,11 @@ fn auto_sync_after_discovery(config: &Config, db: &mut Db, reason: &str) -> Resu
             for path in &report.remove {
                 println!("  - {path}");
             }
-            for path in report.failed_adds.iter().chain(report.failed_removes.iter()) {
+            for path in report
+                .failed_adds
+                .iter()
+                .chain(report.failed_removes.iter())
+            {
                 println!("  ! Spotlight did not apply: {path}");
             }
         }
@@ -1068,10 +1064,7 @@ fn cmd_sync(config: &Config, db: &mut Db, dry_run: bool, json_output: bool) -> R
         println!("{} {path}", if dry_run { "+ (would add)" } else { "+" });
     }
     for path in &report.remove {
-        println!(
-            "{} {path}",
-            if dry_run { "- (would remove)" } else { "-" }
-        );
+        println!("{} {path}", if dry_run { "- (would remove)" } else { "-" });
     }
     for path in &report.failed_adds {
         println!("! Spotlight did not apply exclusion: {path}");
