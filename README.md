@@ -80,24 +80,6 @@ quarantined:
 xattr -d com.apple.quarantine ~/Downloads/spotsweep-macos-universal.zip
 ```
 
-### GitHub repository rename (manual action)
-
-The source tree and installers use `Popoola-Opeyemi/spotsweep`. Renaming the
-GitHub repository from `spotlight-dev-exclusions` to `spotsweep` is a GitHub
-setting and is not performed by this repository's code. Until that rename
-happens, release downloads and the Homebrew formula URL can be overridden:
-
-```bash
-REPOSITORY=Popoola-Opeyemi/spotlight-dev-exclusions \
-  bash scripts/install-release.sh
-```
-
-For Homebrew, update `url` and `homepage` in `Formula/spotsweep.rb` (or the tap
-copy) to the actual repository. The release workflow itself uses
-`github.repository`, so it works either before or after the rename.
-
----
-
 ## Automatic exclusion and the fallback
 
 Apple does not document a public API for adding individual folders to
@@ -354,7 +336,6 @@ The old `spotlight-dev` command is intentionally not kept as an alias. Use
 For Homebrew users, package names differ during the rename:
 
 ```bash
-brew uninstall spotlight-dev-exclusions
 brew install spotsweep
 brew services start spotsweep
 spotsweep status
