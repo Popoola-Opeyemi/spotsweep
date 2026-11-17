@@ -8,8 +8,7 @@ FSEvents, and adds them to the same **Spotlight Search Privacy** list used by
 System Settings.
 
 Automatic exclusion uses the private `_MDCopyExclusionList` / `_MDSetExclusion`
-calls in `Metadata.framework`, the same mechanism used by
-[`rohiitgit/nohog`](https://github.com/rohiitgit/nohog). Every change is verified
+calls in `Metadata.framework`Every change is verified
 against Spotlight's reported list, and a self-test proves the API works on the
 current macOS build before it is enabled. If the API is missing or a change is
 not confirmed, the directory stays in the manual export workflow instead.
